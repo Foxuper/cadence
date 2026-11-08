@@ -47,3 +47,86 @@ jobs:
 
       - name: Pytest
         run: uv run --python .venv --no-project python -m pytest -q
+
+  release:
+    name: Release
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+
+      - name: Detect version bump
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          current="$(grep -m1 '^version:' plugin.yaml | sed -E 's/^version:[[:space:]]*"?([^"]+)"?.*/\1/')"
+          previous="$(git show HEAD^:plugin.yaml 2>/dev/null | grep -m1 '^version:' | sed -E 's/^version:[[:space:]]*"?([^"]+)"?.*/\1/' || true)"
+          if [ -z "$current" ]; then
+            echo "::error::Could not read plugin.yaml version"
+            exit 1
+          fi
+          if [ "$current" = "$previous" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Version unchanged ($current); skipping release."
+            exit 0
+          fi
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          echo "version=$current" >> "$GITHUB_OUTPUT"
+          echo "Version $previous -> $current"
+
+      - name: Publish release
+        if: steps.version.outputs.changed == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          tag="v$VERSION"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Release $tag already exists; skipping."
+            exit 0
+          fi
+
+          python - "$VERSION" <<'PY'
+          import pathlib
+          import re
+          import sys
+
+          version = sys.argv[1]
+          text = pathlib.Path("CHANGELOG.md").read_text(encoding="utf-8")
+          match = re.search(rf"^## \[{re.escape(version)}\].*?$", text, re.M)
+          if match is None:
+              raise SystemExit(f"CHANGELOG section for {version} not found")
+          rest = text[match.end():]
+          next_section = re.search(r"^## \[", rest, re.M)
+          notes = rest[: next_section.start()] if next_section else rest
+          pathlib.Path("release-notes.md").write_text(notes.strip() + "\n", encoding="utf-8")
+          PY
+
+          if ! test -s release-notes.md; then
+            echo "::error::Empty release notes for $VERSION"
+            exit 1
+          fi
+
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+            tag_sha="$(git ls-remote --tags origin "refs/tags/$tag^{}" | awk '{print $1}')"
+            if [ -z "$tag_sha" ]; then
+              tag_sha="$(git ls-remote --tags origin "refs/tags/$tag" | awk '{print $1}')"
+            fi
+            if [ "$tag_sha" != "$GITHUB_SHA" ]; then
+              echo "::error::Tag $tag points to $tag_sha, not $GITHUB_SHA"
+              exit 1
+            fi
+            gh release create "$tag" --title "cadence $VERSION" --notes-file release-notes.md --latest
+          else
+            gh release create "$tag" --target "$GITHUB_SHA" --title "cadence $VERSION" --notes-file release-notes.md --latest
+          fi

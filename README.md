@@ -52,7 +52,8 @@ you (/cadence) or the agent (cadence tool)
 SQLite schedule (one row per beat)
         │
         ▼  every poll_seconds
-gates: enabled · quiet hours · human proof · unanswered · daily caps · spacing · catch-up
+gates: enabled · expiry · catch-up · scope · quiet hours · human proof
+       · unanswered · daily caps · spacing
         │
         ▼
 one turn in the same chat, on its own model
@@ -62,8 +63,8 @@ one turn in the same chat, on its own model
 ```
 
 One scheduler runs per profile, guarded by a cross-process file lock. Claims are
-atomic, so a beat cannot fire twice. A process that dies mid-fire is recovered
-on the next start.
+atomic, so two workers cannot fire the same beat at once. A crash mid-fire can
+still produce a retry, so delivery is at-least-once.
 
 ## Install
 
@@ -152,9 +153,62 @@ caps, catch-up, expiry, human proof and unanswered mute — always apply.
 
 ## Commands
 
+`/cadence` with no arguments, or `/cadence help`, prints the command list.
+
+### Syntax
+
+```text
+/cadence list
+/cadence show <id>
+/cadence add [session|chat] [urgent] <when> [until <duration>] [max <n>] <note>
+/cadence update <id> note <note>
+/cadence update <id> <when> [until <duration>] [max <n>] [note]
+/cadence update <id> until <duration>
+/cadence update <id> max <n>
+/cadence update <id> urgent true|false
+/cadence pause <id>
+/cadence resume <id>
+/cadence cancel <id>
+/cadence delete <id>
+```
+
+`<when>` accepts:
+
+| Form | Meaning |
+|---|---|
+| `in 10m` | One-shot relative to creation |
+| `every 15m` | Recurring interval |
+| `at 16:30` | One-shot at a clock time; if already past, tomorrow |
+| `16:30` | Same as `at 16:30` |
+| ISO timestamp | One-shot at an exact time |
+
+`<duration>` accepts `30m`, `2h`, `1d` or a bare number of minutes. `until`
+accepts a duration, `in 2h` or an ISO timestamp.
+
+`max <n>` is the lifetime fire limit for recurring beats. `urgent` is per
+beat; `urgent_bypass` decides which gates it may skip.
+
+`scope` defaults to `chat`; `session` pins the beat to the current session. On
+`add`, `urgent` is a flag; on `update`, it requires `true` or `false`.
+
+### All commands
+
 | Command | What it does |
 |---|---|
-| `/cadence list` | Beats in this chat |
+| `/cadence` or `/cadence help` | Show help |
+| `/cadence list` | List beats in this chat |
+| `/cadence show <id>` | Show one beat |
+| `/cadence add ...` | Create a beat |
+| `/cadence update ...` | Update a beat |
+| `/cadence pause <id>` | Pause an active beat |
+| `/cadence resume <id>` | Resume a paused beat |
+| `/cadence cancel <id>` | Cancel an active beat |
+| `/cadence delete <id>` | Delete a beat |
+
+### Common examples
+
+| Example | What it does |
+|---|---|
 | `/cadence add in 10m <note>` | One-shot reminder |
 | `/cadence add urgent in 10m <note>` | One-shot; bypass depends on `urgent_bypass` |
 | `/cadence add every 15m <note>` | Recurring beat |
@@ -162,22 +216,32 @@ caps, catch-up, expiry, human proof and unanswered mute — always apply.
 | `/cadence add every 15m until 2h <note>` | Recurring with an expiry |
 | `/cadence add every 15m max 12 <note>` | Recurring with a fire limit |
 | `/cadence add at 16:30 <note>` | One-shot at a clock time |
-| `/cadence show <id>` | Details for one beat |
-| `/cadence pause|resume|cancel|delete <id>` | Control a beat |
 | `/cadence update <id> note <note>` | Edit the note |
 | `/cadence update <id> in 20m <note>` | Reschedule |
-| `/cadence update <id> urgent true|false` | Toggle urgent |
+| `/cadence update <id> urgent true` | Mark urgent |
+| `/cadence update <id> urgent false` | Clear urgent |
 
-The agent gets the same actions as a `cadence` tool: `create`, `list`, `get`,
-`update`, `pause`, `resume`, `cancel` and `delete`. The tool and the slash
-command accept the same fields: `scope`, `at`/`every`, `until`, `max_fires`
-(`max`) and `urgent`.
+### Tool actions
 
-On a beat turn, the agent finishes with the tool's `respond` action:
-`silent=true` suppresses the final message, `silent=false` delivers it. The tool
-schema is sent on every model call, so the model knows this without an extra
-per-turn hint. If it forgets, an exact `[SILENT]` is still suppressed as a
-defensive fallback.
+| Action | Fields |
+|---|---|
+| `create` | `note`, one of `at` or `every`, optional `scope`, `until`, `max_fires`, `urgent` |
+| `list` | — |
+| `get` | `id` |
+| `update` | `id`, plus any of `note`, `at`, `every`, `until`, `max_fires`, `urgent` |
+| `pause` | `id` |
+| `resume` | `id` |
+| `cancel` | `id` |
+| `delete` | `id` |
+| `respond` | `silent`; only valid on a beat turn |
+
+The agent gets the same actions through the `cadence` tool. On a beat turn,
+finish with `respond`: `silent=true` suppresses the final message,
+`silent=false` delivers it. The tool schema is sent on every model call, so the
+model knows this without an extra per-turn hint. If it forgets, an exact
+`[SILENT]` is still suppressed as a defensive fallback.
+
+### Receipts
 
 Create and update results also include `quiet_hours_until`,
 `spacing_until`, `cap_until`, `effective_next_at` and a `warning`. The warning
@@ -231,8 +295,8 @@ monitor.
 - Delivery follows the core permission described in
   [Configuration](#configuration); a beat never chooses another chat.
 - No network calls, no credential reads, no shell commands.
-- A process that dies mid-fire is retried after `recover_stale` (300 s), so
-  delivery is at-least-once, not exactly-once.
+- A process that dies mid-fire is recovered after the 300 s stale-claim window
+  on the next poll. Delivery is at-least-once, not exactly-once.
 
 ## Layout
 
@@ -246,7 +310,7 @@ cadence/                     plugin root
 │   ├── protocols.py         shared Protocols (Clock, Injector, Hermes surfaces)
 │   └── tool.py              model-facing tool and /cadence command
 └── tests/
-    ├── core/                engine, store, schedule, scope
+    ├── core/                engine, store, schedule, scope, policy
     ├── hermes/              hooks, registration, file lock
     └── tool/                tool and command
 ```
@@ -254,6 +318,13 @@ cadence/                     plugin root
 `pythonpath = tests` in `pytest.ini` keeps `tests/support.py` importable from
 the subfolders without making `tests` a package (the plugin root is also named
 `cadence`, so a `tests/__init__.py` would confuse the loader).
+
+## Releasing
+
+Bump `version:` in `plugin.yaml` and add the matching `## [x.y.z]` section to
+`CHANGELOG.md` in the same commit. On `main`, after tests pass, CI creates the
+`vX.Y.Z` tag and the GitHub release from that CHANGELOG section, and marks it
+Latest. A commit that does not change the version does not create a release.
 
 ## Development
 
@@ -280,8 +351,8 @@ uvx basedpyright
 `uvx` downloads Ruff and basedpyright on demand, so they are not plugin
 dependencies. The `.venv` exists so basedpyright can resolve `pytest` and
 `PyYAML`; `--no-project` keeps `uv run` from looking for a `pyproject.toml`.
-The test suite covers `tests/core`, `tests/hermes`, `tests/tool` and the
-manifest/policy defaults test at the root.
+The test suite covers `tests/core`, `tests/hermes`, `tests/tool`, manifest
+defaults and `urgent_bypass` parsing.
 
 `.venv/` is dev-only: Hermes never imports it and `requirements-dev.txt` is
 not a plugin dependency declaration. `pyrightconfig.json` points at it through
