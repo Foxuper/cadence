@@ -180,13 +180,15 @@ caps, catch-up, expiry, human proof and unanswered mute — always apply.
 | `every 15m` | Recurring interval |
 | `at 16:30` | One-shot at a clock time; if already past, tomorrow |
 | `16:30` | Same as `at 16:30` |
+| `daily at 09:00,13:00` | Recurring at local wall-clock times; one beat, multiple times |
 | ISO timestamp | One-shot at an exact time |
 
 `<duration>` accepts `30m`, `2h`, `1d` or a bare number of minutes. `until`
 accepts a duration, `in 2h` or an ISO timestamp.
 
 `max <n>` is the lifetime fire limit for recurring beats. `urgent` is per
-beat; `urgent_bypass` decides which gates it may skip.
+beat; `urgent_bypass` decides which gates it may skip. `daily` and `every` are
+mutually exclusive; `daily` takes a comma-separated list of `HH:MM` local times.
 
 `scope` defaults to `chat`; `session` pins the beat to the current session. On
 `add`, `urgent` is a flag; on `update`, it requires `true` or `false`.
@@ -216,8 +218,10 @@ beat; `urgent_bypass` decides which gates it may skip.
 | `/cadence add every 15m until 2h <note>` | Recurring with an expiry |
 | `/cadence add every 15m max 12 <note>` | Recurring with a fire limit |
 | `/cadence add at 16:30 <note>` | One-shot at a clock time |
+| `/cadence add daily at 09:00,13:00 <note>` | Recurring at local clock times |
 | `/cadence update <id> note <note>` | Edit the note |
 | `/cadence update <id> in 20m <note>` | Reschedule |
+| `/cadence update <id> daily at 09:00,13:00` | Switch to daily times |
 | `/cadence update <id> urgent true` | Mark urgent |
 | `/cadence update <id> urgent false` | Clear urgent |
 
@@ -225,10 +229,10 @@ beat; `urgent_bypass` decides which gates it may skip.
 
 | Action | Fields |
 |---|---|
-| `create` | `note`, one of `at` or `every`, optional `scope`, `until`, `max_fires`, `urgent` |
+| `create` | `note`, one of `at`, `every` or `daily`, optional `scope`, `until`, `max_fires`, `urgent` |
 | `list` | — |
 | `get` | `id` |
-| `update` | `id`, plus any of `note`, `at`, `every`, `until`, `max_fires`, `urgent` |
+| `update` | `id`, plus any of `note`, `at`, `every`, `daily`, `until`, `max_fires`, `urgent` |
 | `pause` | `id` |
 | `resume` | `id` |
 | `cancel` | `id` |

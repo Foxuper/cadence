@@ -1,10 +1,10 @@
 ﻿name: cadence
-version: "0.3.0"
+version: "0.4.0"
 description: >-
-  Minimal heartbeat scheduler for Hermes. Persistent one-shot and recurring
-  beats are injected into the chat that created them, with quiet hours, daily
-  caps, spacing, retry, and terminal-state handling. No watchers, no cron jobs,
-  no bundled skills.
+  Minimal heartbeat scheduler for Hermes. Persistent one-shot, interval and
+  daily wall-clock beats are injected into the chat that created them, with quiet
+  hours, daily caps, spacing, retry, and terminal-state handling. No watchers, no
+  cron jobs, no bundled skills.
 author: Foxuper
 homepage: https://github.com/Foxuper/cadence
 tags:

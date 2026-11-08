@@ -6,6 +6,7 @@ from enum import StrEnum
 class Kind(StrEnum):
     AT = "at"
     EVERY = "every"
+    DAILY = "daily"
 
 
 class Scope(StrEnum):

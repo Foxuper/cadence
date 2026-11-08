@@ -44,3 +44,22 @@ def test_next_day_start() -> None:
 def test_utc_resolves_without_tzdata() -> None:
     assert schedule.tzinfo("UTC") is UTC
     assert schedule.tzinfo("Etc/UTC") is UTC
+
+
+def test_parse_daily_times_normalizes_sorts_and_dedupes() -> None:
+    assert schedule.parse_daily_times("13:00, 9:05,13:00") == ("09:05", "13:00")
+    with pytest.raises(ValueError):
+        schedule.parse_daily_times("")
+    with pytest.raises(ValueError):
+        schedule.parse_daily_times("24:00")
+    with pytest.raises(ValueError):
+        schedule.parse_daily_times("9:5")
+
+
+def test_next_daily_picks_the_next_clock_time() -> None:
+    now = ts(2026, 1, 1, 10, 0)
+    assert schedule.next_daily(now, ("09:00", "13:00"), "UTC") == ts(2026, 1, 1, 13, 0)
+    later = ts(2026, 1, 1, 14, 0)
+    assert schedule.next_daily(later, ("09:00", "13:00"), "UTC") == ts(2026, 1, 2, 9, 0)
+    exactly = ts(2026, 1, 1, 9, 0)
+    assert schedule.next_daily(exactly, ("09:00",), "UTC") == ts(2026, 1, 2, 9, 0)

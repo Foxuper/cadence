@@ -5,6 +5,7 @@ from __future__ import annotations
 import secrets
 import sqlite3
 import threading
+from collections.abc import Iterable
 from pathlib import Path
 from typing import cast
 
@@ -21,6 +22,7 @@ CREATE TABLE IF NOT EXISTS beats (
     kind TEXT NOT NULL,
     next_at REAL,
     interval_s REAL,
+    daily_times TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL,
     created_at REAL NOT NULL,
     updated_at REAL NOT NULL,
@@ -77,6 +79,10 @@ def _opt_text(value: object) -> str | None:
     return value if isinstance(value, str) else None
 
 
+def _daily_times(value: object) -> tuple[str, ...]:
+    return tuple(part.strip() for part in _text(value).split(",") if part.strip())
+
+
 def _float(value: object, default: float = 0.0) -> float:
     return float(value) if isinstance(value, (int, float)) else default
 
@@ -113,6 +119,7 @@ class Store:
         self.conn.commit()
         self._ensure_column("beats", "scope", "TEXT NOT NULL DEFAULT 'chat'")
         self._ensure_column("beats", "urgent", "INTEGER NOT NULL DEFAULT 0")
+        self._ensure_column("beats", "daily_times", "TEXT NOT NULL DEFAULT ''")
         self._ensure_column("beats", "anchor_session_id", "TEXT")
         self._ensure_column("beats", "noop_streak", "INTEGER NOT NULL DEFAULT 0")
         self._ensure_column("sessions", "human_session_id", "TEXT")
@@ -141,6 +148,7 @@ class Store:
             kind=Kind(_text(data["kind"])),
             next_at=_opt_float(data["next_at"]),
             interval_s=_opt_float(data["interval_s"]),
+            daily_times=_daily_times(data["daily_times"]),
             status=Status(_text(data["status"])),
             created_at=_float(data["created_at"]),
             updated_at=_float(data["updated_at"]),
@@ -175,15 +183,16 @@ class Store:
         expires_at: float | None,
         scope: Scope = Scope.CHAT,
         urgent: bool = False,
+        daily_times: tuple[str, ...] = (),
         anchor_session_id: str | None = None,
     ) -> Beat:
         now = self.clock.now()
         beat_id = "c_" + secrets.token_hex(4)
         with self.conn:
             self.conn.execute(
-                "INSERT INTO beats(id,session_key,note,kind,next_at,interval_s,status,"
-                "created_at,updated_at,max_fires,expires_at,scope,urgent,anchor_session_id) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO beats(id,session_key,note,kind,next_at,interval_s,daily_times,"
+                "status,created_at,updated_at,max_fires,expires_at,scope,urgent,anchor_session_id) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     beat_id,
                     session_key,
@@ -191,6 +200,7 @@ class Store:
                     kind,
                     next_at,
                     interval_s,
+                    ",".join(daily_times),
                     Status.ACTIVE,
                     now,
                     now,
@@ -226,6 +236,9 @@ class Store:
         updates = patch.items() if patch is not None else {}
         if not updates:
             return self.require_beat(beat_id)
+        daily_times = updates.get("daily_times")
+        if isinstance(daily_times, (tuple, list)):
+            updates["daily_times"] = ",".join(str(item) for item in cast("Iterable[object]", daily_times))
         updates["updated_at"] = self.clock.now()
         columns = ", ".join(f"{key}=?" for key in updates)
         with self.conn:
@@ -404,7 +417,9 @@ class Store:
             )
         return cursor.rowcount > 0
 
-    def complete(self, beat: Beat, due_key: str, now: float, day: str) -> Beat:
+    def complete(
+        self, beat: Beat, due_key: str, now: float, day: str, *, next_at_override: float | None = None
+    ) -> Beat:
         current = self.require_beat(beat.id)
         fires = current.fires + 1
         done = current.kind is Kind.AT or (current.max_fires is not None and fires >= current.max_fires)
@@ -416,6 +431,8 @@ class Store:
             status = Status.DONE if done else Status.ACTIVE
             if done:
                 next_at = None
+            elif current.kind is Kind.DAILY:
+                next_at = next_at_override if next_at_override is not None else now + 86400
             else:
                 interval = float(current.interval_s or 0)
                 candidate = float(current.next_at or now) + interval

@@ -27,6 +27,7 @@ class BeatPatch:
     kind: Kind | Unset = UNSET
     next_at: float | Unset | None = UNSET
     interval_s: float | Unset | None = UNSET
+    daily_times: tuple[str, ...] | Unset = UNSET
     status: Status | Unset = UNSET
     urgent: bool | Unset = UNSET
     max_fires: int | Unset | None = UNSET

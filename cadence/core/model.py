@@ -32,6 +32,7 @@ class Beat:
     version: int = 1
     scope: Scope = Scope.CHAT
     urgent: bool = False
+    daily_times: tuple[str, ...] = ()
     anchor_session_id: str | None = None
     noop_streak: int = 0
 
@@ -52,6 +53,7 @@ class BeatView:
     status: Status
     next_at: float | None
     interval_s: float | None
+    daily_times: tuple[str, ...]
     fires: int
     max_fires: int | None
     expires_at: float | None
@@ -68,6 +70,7 @@ class BeatView:
             status=beat.status,
             next_at=beat.next_at,
             interval_s=beat.interval_s,
+            daily_times=beat.daily_times,
             fires=beat.fires,
             max_fires=beat.max_fires,
             expires_at=beat.expires_at,
@@ -84,6 +87,7 @@ class BeatView:
             "status": self.status.value,
             "next_at": self.next_at,
             "interval_s": self.interval_s,
+            "daily_times": list(self.daily_times),
             "fires": self.fires,
             "max_fires": self.max_fires,
             "expires_at": self.expires_at,

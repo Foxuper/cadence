@@ -56,6 +56,10 @@ SCHEMA = {
                 "type": "string",
                 "description": "Recurring interval: '1h', '30m', '1d'.",
             },
+            "daily": {
+                "type": "string",
+                "description": "Recurring local clock times, comma-separated: '09:00,13:00,17:00'. One beat fires at each time daily.",
+            },
             "until": {
                 "type": "string",
                 "description": "Optional expiry: 'in 2h', '2h' or an ISO timestamp.",
@@ -92,12 +96,14 @@ HELP = """Cadence:
 /cadence add every 15m until 2h <note>
 /cadence add every 15m max 12 <note>
 /cadence add at 16:30 <note>
+/cadence add daily at 09:00,13:00 <note>
 /cadence show <id>
 /cadence pause|resume|cancel|delete <id>
 /cadence update <id> note <note>
 /cadence update <id> in 20m <note>
 /cadence update <id> until 2h
 /cadence update <id> max 12
+/cadence update <id> daily at 09:00,13:00
 /cadence update <id> urgent true|false
 
 A beat turn finishes with the cadence tool's respond action; silent=true suppresses the message."""
@@ -153,6 +159,7 @@ class _Schedule:
     kind: Kind
     next_at: float
     interval_s: float | None
+    daily_times: tuple[str, ...] = ()
 
 
 class _ToolError(Exception):
@@ -166,18 +173,25 @@ class _ToolError(Exception):
         return Result.failure(self.code, self.detail, self.minimum_seconds)
 
 
-def _parse_schedule(args: Mapping[str, object], now: float, policy: Policy) -> _Schedule | None:
-    at, every = _str_arg(args, "at"), _str_arg(args, "every")
-    if at and every:
-        raise _ToolError(ErrorCode.ONE_OF_AT_OR_EVERY)
-    if not at and not every:
+def _parse_schedule(
+    args: Mapping[str, object], now: float, policy: Policy, *, required: bool = True
+) -> _Schedule | None:
+    at, every, daily = _str_arg(args, "at"), _str_arg(args, "every"), _str_arg(args, "daily")
+    if not at and not every and not daily:
+        if required:
+            raise _ToolError(ErrorCode.ONE_OF_AT_OR_EVERY, "use exactly one of at, every or daily")
         return None
+    if sum(bool(value) for value in (at, every, daily)) != 1:
+        raise _ToolError(ErrorCode.ONE_OF_AT_OR_EVERY, "use exactly one of at, every or daily")
     try:
         if every:
             interval = schedule.parse_duration(every)
             if policy.min_interval_s and interval < policy.min_interval_s:
                 raise _ToolError(ErrorCode.INTERVAL_TOO_SHORT, minimum_seconds=policy.min_interval_s)
             return _Schedule(Kind.EVERY, now + interval, interval)
+        if daily:
+            times = schedule.parse_daily_times(daily)
+            return _Schedule(Kind.DAILY, schedule.next_daily(now, times, policy.timezone), None, times)
         kind, next_at, interval_s = schedule.parse_when(at or "", now, policy.timezone)
         if kind is not Kind.AT:
             raise _ToolError(ErrorCode.USE_EVERY_FIELD)
@@ -320,9 +334,6 @@ class Tool:
         note = (_str_arg(args, "note") or "").strip()
         if not note:
             return Result.failure(ErrorCode.NOTE_REQUIRED)
-        at, every = _str_arg(args, "at"), _str_arg(args, "every")
-        if bool(at) == bool(every):
-            return Result.failure(ErrorCode.ONE_OF_AT_OR_EVERY)
         scope_text = (_str_arg(args, "scope") or Scope.CHAT.value).strip().lower()
         try:
             scope = Scope(scope_text)
@@ -353,6 +364,7 @@ class Tool:
             expires_at=expires_at,
             scope=scope,
             urgent=_as_bool(args.get("urgent")),
+            daily_times=parsed.daily_times,
             anchor_session_id=anchor,
         )
         return self._result_for(beat, policy, now)
@@ -369,11 +381,8 @@ class Tool:
             if not note:
                 return Result.failure(ErrorCode.NOTE_REQUIRED)
             patch = replace(patch, note=note)
-        at, every = _str_arg(args, "at"), _str_arg(args, "every")
-        if at and every:
-            return Result.failure(ErrorCode.ONE_OF_AT_OR_EVERY)
         try:
-            parsed = _parse_schedule(args, now, policy)
+            parsed = _parse_schedule(args, now, policy, required=False)
             max_fires = _parse_max_fires(args)
         except _ToolError as exc:
             return exc.result()
@@ -382,6 +391,7 @@ class Tool:
                 patch,
                 kind=parsed.kind,
                 interval_s=parsed.interval_s,
+                daily_times=parsed.daily_times,
                 next_at=parsed.next_at,
             )
         if max_fires is not None:
@@ -428,6 +438,8 @@ class Tool:
         text = f"{beat.id} [{beat.status.value}] {beat.kind.value}/{beat.scope.value}"
         if beat.urgent:
             text += " \u00b7 urgent"
+        if beat.kind is Kind.DAILY and beat.daily_times:
+            text += f" \u00b7 {','.join(beat.daily_times)}"
         if when:
             text += f" \u00b7 {when}"
         text += f" \u00b7 {beat.note}"
@@ -526,8 +538,23 @@ class Tool:
                     args["urgent"] = True
                     rest = rest[1:]
                 if not rest:
-                    return "Usage: /cadence add [session|chat] [urgent] every 15m [until 2h] [max 12] <note>"
-                if rest[0].lower() in {"in", "every", "at"}:
+                    return (
+                        "Usage: /cadence add [session|chat] [urgent] "
+                        "(in 10m|every 15m|at 16:30|daily at 09:00,13:00) "
+                        "[until 2h] [max 12] <note>"
+                    )
+                if rest[0].lower() == "daily":
+                    if len(rest) < 2:
+                        return "Missing the daily times."
+                    if rest[1].lower() == "at":
+                        if len(rest) < 3:
+                            return "Missing the daily times."
+                        args["daily"] = rest[2]
+                        rest = rest[3:]
+                    else:
+                        args["daily"] = rest[1]
+                        rest = rest[2:]
+                elif rest[0].lower() in {"in", "every", "at"}:
                     if len(rest) < 2:
                         return "Missing the beat time."
                     if rest[0].lower() == Kind.EVERY.value:
@@ -553,7 +580,7 @@ class Tool:
                 if len(parts) < 3:
                     return (
                         "Usage: /cadence update <id> note <note> | in 20m <note> | "
-                        "until 2h | max 12 | urgent true|false"
+                        "daily at 09:00,13:00 <note> | until 2h | max 12 | urgent true|false"
                     )
                 args["id"] = parts[1]
                 rest = parts[2:]
@@ -572,6 +599,17 @@ class Tool:
                     else:
                         args["at"] = f"{kind} {rest[1]}"
                     rest = rest[2:]
+                elif kind == "daily":
+                    if len(rest) < 2:
+                        return "Missing the daily times."
+                    if rest[1].lower() == "at":
+                        if len(rest) < 3:
+                            return "Missing the daily times."
+                        args["daily"] = rest[2]
+                        rest = rest[3:]
+                    else:
+                        args["daily"] = rest[1]
+                        rest = rest[2:]
                 elif kind == "urgent":
                     if len(rest) < 2 or rest[1].lower() not in {"true", "false"}:
                         return "Usage: /cadence update <id> urgent true|false"

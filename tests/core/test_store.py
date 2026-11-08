@@ -7,6 +7,7 @@ from typing import cast
 from support import KEY, FakeClock, make_store
 
 from cadence.core.enums import Kind, OccurrenceState, Reason, Status
+from cadence.core.patch import BeatPatch
 
 
 def test_create_claim_complete_one_shot(tmp_path: Path, clock: FakeClock) -> None:
@@ -196,3 +197,25 @@ def test_recover_stale_claims(tmp_path: Path, clock: FakeClock) -> None:
     )
     assert recent is not None and cast(str, recent["state"]) == OccurrenceState.CLAIMED
     assert store.recover_stale(clock.now()) == 0
+
+
+def test_daily_times_roundtrip_and_reschedule(tmp_path: Path, clock: FakeClock) -> None:
+    store = make_store(tmp_path, clock)
+    beat = store.create_beat(
+        session_key=KEY,
+        note="daily",
+        kind=Kind.DAILY,
+        next_at=clock.now() + 3600,
+        interval_s=None,
+        max_fires=None,
+        expires_at=None,
+        daily_times=("09:00", "13:00"),
+    )
+    assert beat.daily_times == ("09:00", "13:00")
+    updated = store.update_beat(beat.id, BeatPatch(daily_times=("10:00", "14:00")))
+    assert updated.daily_times == ("10:00", "14:00")
+    override = clock.now() + 7200
+    completed = store.complete(updated, "kd", clock.now(), "2026-01-01", next_at_override=override)
+    assert completed.status is Status.ACTIVE
+    assert completed.next_at == override
+    assert completed.fires == 1

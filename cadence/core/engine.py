@@ -7,6 +7,7 @@ import secrets
 from dataclasses import dataclass
 
 from ..protocols import Clock, Injector
+from . import schedule
 from .enums import Kind, Reason, Scope, Status, UnansweredPolicy, UrgentGate
 from .model import MARKER, Beat
 from .policy import Policy, PolicyProvider
@@ -114,7 +115,10 @@ class Engine:
             if self.store.get_beat(plan.beat.id) is None:
                 return accepted
             if accepted:
-                self.store.complete(plan.beat, plan.due_key, now, plan.day)
+                next_at = None
+                if plan.beat.kind is Kind.DAILY:
+                    next_at = schedule.next_daily(now, plan.beat.daily_times, policy.timezone)
+                self.store.complete(plan.beat, plan.due_key, now, plan.day, next_at_override=next_at)
             else:
                 self.store.fail(plan.beat, plan.due_key, now, Reason.INJECT_REFUSED, policy.retry_s)
         return accepted

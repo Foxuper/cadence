@@ -326,3 +326,24 @@ def test_delete_during_injection_removes_beat(tmp_path: Path, clock: FakeClock) 
     engine = Engine(store, clock, inject, lambda: pol)
     assert engine.tick() == 1
     assert store.get_beat(created.id) is None
+
+
+def test_daily_reschedules_to_next_clock_time(tmp_path: Path, clock: FakeClock) -> None:
+    store, engine, calls = setup(tmp_path, clock)
+    clock.wall = datetime(2026, 1, 1, 9, 0, tzinfo=UTC).timestamp()
+    created = store.create_beat(
+        session_key=KEY,
+        note="daily",
+        kind=Kind.DAILY,
+        next_at=clock.now(),
+        interval_s=None,
+        max_fires=None,
+        expires_at=None,
+        daily_times=("09:00", "13:00"),
+    )
+    assert engine.tick() == 1
+    assert len(calls) == 1
+    stored = store.require_beat(created.id)
+    assert stored.status is Status.ACTIVE
+    assert stored.fires == 1
+    assert stored.next_at == datetime(2026, 1, 1, 13, 0, tzinfo=UTC).timestamp()

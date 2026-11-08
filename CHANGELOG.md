@@ -2,6 +2,15 @@
 
 All notable changes to cadence are documented here.
 
+## [0.4.0] - 2026-11-08
+
+### Added
+
+- `daily at HH:MM[,HH:MM...]` schedules: one beat fires at local wall-clock
+  times each day. Multiple times share one note and one beat.
+- `daily` field in the cadence tool and `/cadence add|update <id> daily at ...`
+  in the slash command.
+
 ## [0.3.0] - 2026-11-08
 
 ### Changed

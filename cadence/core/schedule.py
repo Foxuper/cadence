@@ -102,6 +102,46 @@ def parse_until(text: object | None, now: float, tz_name: str = "") -> float | N
     return parsed.timestamp()
 
 
+def parse_daily_times(text: object) -> tuple[str, ...]:
+    """Parse ``09:00,13:00`` into sorted, deduplicated local clock times."""
+    raw = str(text or "").strip()
+    if not raw:
+        raise ValueError("daily requires at least one time")
+    parts = [part for part in re.split(r"[,\s]+", raw) if part]
+    times: list[str] = []
+    for part in parts:
+        match = CLOCK_RE.match(part)
+        if not match:
+            raise ValueError(f"invalid daily time: {part!r} (use HH:MM)")
+        hour, minute = int(match.group(1)), int(match.group(2))
+        if hour > 23 or minute > 59:
+            raise ValueError("daily time must be HH:MM")
+        value = f"{hour:02d}:{minute:02d}"
+        if value not in times:
+            times.append(value)
+    if not times:
+        raise ValueError("daily requires at least one time")
+    return tuple(sorted(times))
+
+
+def next_daily(now: float, times: tuple[str, ...], tz_name: str = "") -> float:
+    """Next local wall-clock occurrence from ``times``, strictly after ``now``."""
+    if not times:
+        return now + 86400
+    tz = tzinfo(tz_name)
+    local = datetime.fromtimestamp(now, tz)
+    best: float | None = None
+    for value in times:
+        hour, minute = (int(part) for part in value.split(":", 1))
+        candidate = local.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        timestamp = candidate.timestamp()
+        if timestamp <= now:
+            timestamp = (candidate + timedelta(days=1)).timestamp()
+        if best is None or timestamp < best:
+            best = timestamp
+    return best if best is not None else now + 86400
+
+
 def local_day(now: float, tz_name: str = "") -> str:
     return datetime.fromtimestamp(now, tzinfo(tz_name)).date().isoformat()
 

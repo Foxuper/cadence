@@ -419,3 +419,49 @@ def test_receipt_warns_about_missing_human_proof(tmp_path: Path, clock: FakeCloc
     _, tool = make_tool(tmp_path, clock, human=False)
     result = tool.handle({"action": Action.CREATE, "at": "in 10m", "note": "x"})
     assert result.warning is not None and "no human message" in result.warning
+
+
+def test_create_daily_schedule(tmp_path: Path, clock: FakeClock) -> None:
+    store, tool = make_tool(tmp_path, clock)
+    result = tool.handle({"action": Action.CREATE, "daily": "13:00, 9:00,13:00", "note": "pulse"})
+    assert result.ok is True and result.beat is not None
+    assert result.beat.kind is Kind.DAILY
+    assert result.beat.daily_times == ("09:00", "13:00")
+    stored = store.require_beat(result.beat.id)
+    assert stored.daily_times == ("09:00", "13:00")
+    assert stored.interval_s is None
+
+
+def test_create_rejects_mixed_schedules(tmp_path: Path, clock: FakeClock) -> None:
+    _, tool = make_tool(tmp_path, clock)
+    result = tool.handle({"action": Action.CREATE, "daily": "09:00", "at": "in 10m", "note": "x"})
+    assert result.ok is False and result.error is ErrorCode.ONE_OF_AT_OR_EVERY
+
+
+def test_command_add_daily(tmp_path: Path, clock: FakeClock) -> None:
+    store, tool = make_tool(tmp_path, clock)
+    text = tool.command("add daily at 09:00,13:00 recordar")
+    assert "daily" in text and "09:00,13:00" in text
+    beat = store.list_beats(KEY)[0]
+    assert beat.kind is Kind.DAILY and beat.daily_times == ("09:00", "13:00")
+
+
+def test_update_to_daily(tmp_path: Path, clock: FakeClock) -> None:
+    store, tool = make_tool(tmp_path, clock)
+    created = tool.handle({"action": Action.CREATE, "at": "in 10m", "note": "x"}).beat
+    assert created is not None
+    result = tool.handle({"action": Action.UPDATE, "id": created.id, "daily": "10:00,14:00"})
+    assert result.ok is True and result.beat is not None
+    assert result.beat.kind is Kind.DAILY
+    assert result.beat.daily_times == ("10:00", "14:00")
+    assert store.require_beat(created.id).interval_s is None
+
+
+def test_command_update_daily(tmp_path: Path, clock: FakeClock) -> None:
+    store, tool = make_tool(tmp_path, clock)
+    created = tool.handle({"action": Action.CREATE, "at": "in 10m", "note": "x"}).beat
+    assert created is not None
+    text = tool.command(f"update {created.id} daily at 10:00")
+    assert "daily" in text and "10:00" in text
+    assert store.require_beat(created.id).kind is Kind.DAILY
+    assert store.require_beat(created.id).daily_times == ("10:00",)
