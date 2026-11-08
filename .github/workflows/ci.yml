@@ -1,0 +1,50 @@
+name: CI
+
+"on":
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / py${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.11", "3.14"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Create development venv
+        run: uv venv .venv --python ${{ matrix.python-version }}
+
+      - name: Install dev dependencies
+        run: uv pip install --python .venv -r requirements-dev.txt
+
+      - name: Ruff lint
+        run: uvx --from ruff==0.17.4 ruff check .
+
+      - name: Ruff format
+        run: uvx --from ruff==0.17.4 ruff format --check .
+
+      - name: Basedpyright
+        run: uvx --from basedpyright==1.40.2 basedpyright
+
+      - name: Pytest
+        run: uv run --python .venv --no-project python -m pytest -q

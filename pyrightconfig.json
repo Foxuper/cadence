@@ -1,0 +1,28 @@
+{
+	"include": [
+		"cadence",
+		"tests",
+		"__init__.py"
+	],
+	"exclude": [
+		"**/__pycache__",
+		"**/.pytest_cache"
+	],
+	"extraPaths": [
+		"tests"
+	],
+	"venvPath": ".",
+	"venv": ".venv",
+	"pythonVersion": "3.11",
+	"typeCheckingMode": "strict",
+	"reportMissingImports": "none",
+	"reportMissingTypeStubs": "none",
+	"reportAny": "error",
+	"reportExplicitAny": "error",
+	"reportUnknownParameterType": "error",
+	"reportUnknownVariableType": "error",
+	"reportUnknownMemberType": "error",
+	"reportUnknownArgumentType": "error",
+	"reportUnknownLambdaType": "error",
+	"reportMissingTypeArgument": "error"
+}

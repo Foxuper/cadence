@@ -1,0 +1,22 @@
+# Ruff config for the cadence plugin. Kept out of pyproject.toml on purpose:
+# Hermes reads a neighbouring pyproject as a dependency declaration.
+line-length = 110
+target-version = "py311"
+
+[lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "C4", "RUF", "ANN401"]
+ignore = [
+	"PLC0415", # late imports of Hermes modules: intentional and profile-safe
+	"SIM105",  # contextlib.suppress() hurts readability in this codebase
+]
+
+[lint.per-file-ignores]
+"tests/*" = ["E501"]
+"cadence/tool.py" = [
+	"E501", # tool schemas and help text read better as long lines
+]
+
+[format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "auto"

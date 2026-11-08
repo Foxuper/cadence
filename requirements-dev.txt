@@ -1,0 +1,4 @@
+# Dev-only tooling. Hermes never reads this file; plugin runtime is stdlib-only.
+pytest>=8,<10
+pyyaml>=6,<7
+tzdata>=2025.3,<2027; sys_platform == "win32"

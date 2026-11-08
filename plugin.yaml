@@ -1,0 +1,109 @@
+﻿name: cadence
+version: "0.1.0"
+description: >-
+  Minimal heartbeat scheduler for Hermes. Persistent one-shot and recurring
+  beats are injected into the chat that created them, with quiet hours, daily
+  caps, spacing, retry, and terminal-state cleanup. No watchers, no cron jobs,
+  no bundled skills.
+author: Foxuper
+homepage: https://github.com/Foxuper/cadence
+tags:
+  - gateway
+  - scheduler
+  - reminders
+manifest_version: 2
+api_version: 1
+kind: standalone
+requires_hermes: ">=0.23.0"
+license: MIT
+config_schema:
+  enabled:
+    type: bool
+    default: true
+    label: "Enabled"
+    description: "Master switch for cadence beats in this profile."
+  timezone:
+    type: str
+    default: ""
+    label: "Time zone"
+    description: "IANA zone name (e.g. UTC). Blank uses the profile time zone."
+  quiet_hours:
+    type: str
+    default: "22:00-08:00"
+    label: "Quiet hours"
+    description: "HH:MM-HH:MM; beats are deferred until the window ends. Blank disables."
+  max_messages_per_day:
+    type: int
+    default: 12
+    label: "Messages per day"
+    description: "Per chat, local day."
+  max_fires_per_day:
+    type: int
+    default: 24
+    label: "Fires per day"
+    description: "Per chat, local day."
+  spacing_minutes:
+    type: int
+    default: 15
+    label: "Minutes between beats"
+    description: "Minimum spacing between two beat turns in the same chat."
+  min_interval_minutes:
+    type: int
+    default: 15
+    label: "Shortest recurring interval"
+    description: "Floor for `every` beats, in minutes."
+  catch_up_minutes:
+    type: int
+    default: 180
+    label: "Catch-up window"
+    description: "A one-shot more than this late is marked missed instead of firing."
+  retry_seconds:
+    type: int
+    default: 300
+    label: "Retry delay"
+    description: "Delay before retrying a beat whose injection was refused."
+  poll_seconds:
+    type: int
+    default: 15
+    label: "Poll interval"
+    description: "How often the scheduler checks for due beats."
+  noop_backoff:
+    type: str
+    default: "gentle"
+    choices: ["off", "gentle", "assertive"]
+    label: "No-op backoff"
+    description: "off, gentle or assertive. A recurring beat that keeps answering [SILENT] slows itself down."
+  noop_after:
+    type: int
+    default: 3
+    label: "Silences before slowing"
+    description: "Consecutive silent fires before the interval grows."
+  noop_max_hours:
+    type: int
+    default: 24
+    label: "Maximum backed-off interval"
+    description: "Cap, in hours, for a slowed recurring beat."
+  noop_pause_after:
+    type: int
+    default: 6
+    label: "Silences before pausing"
+    description: "Pause the beat after this many consecutive silences; 0 disables."
+  unanswered_policy:
+    type: str
+    default: "smart"
+    choices: ["off", "hard", "smart"]
+    label: "Unanswered policy"
+    description: "off, hard or smart. Smart exposes the unanswered count to the agent; hard pauses after the threshold."
+  unanswered_after:
+    type: int
+    default: 2
+    label: "Unanswered threshold"
+    description: "Beats delivered without a human reply before smart/hard action."
+provides_tools:
+  - cadence
+provides_hooks:
+  - pre_gateway_dispatch
+  - on_session_start
+  - pre_llm_call
+  - transform_llm_output
+  - on_session_end
