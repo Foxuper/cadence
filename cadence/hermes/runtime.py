@@ -111,13 +111,13 @@ class Runtime:
         return True
 
     def _loop(self) -> None:
-        try:
-            with self.store.lock:
-                self.store.recover_stale(self.clock.now())
-        except Exception:
-            LOG.warning("cadence: stale recovery failed", exc_info=True)
         while not self.stop.is_set():
             poll_s = 5.0
+            try:
+                with self.store.lock:
+                    self.store.recover_stale(self.clock.now())
+            except Exception:
+                LOG.warning("cadence: stale recovery failed", exc_info=True)
             try:
                 with home_scope(self.home):
                     policy = self.policy_provider()

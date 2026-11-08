@@ -18,6 +18,8 @@ class Result:
     beats: tuple[BeatView, ...] | None = None
     minimum_seconds: float | None = None
     quiet_hours_until: float | None = None
+    spacing_until: float | None = None
+    cap_until: float | None = None
     effective_next_at: float | None = None
     warning: str = ""
 
@@ -28,6 +30,8 @@ class Result:
         beat: Beat | None = None,
         beats: Iterable[Beat] | None = None,
         quiet_hours_until: float | None = None,
+        spacing_until: float | None = None,
+        cap_until: float | None = None,
         effective_next_at: float | None = None,
         warning: str = "",
     ) -> Result:
@@ -36,6 +40,8 @@ class Result:
             beat=BeatView.of(beat) if beat is not None else None,
             beats=tuple(BeatView.of(item) for item in beats) if beats is not None else None,
             quiet_hours_until=quiet_hours_until,
+            spacing_until=spacing_until,
+            cap_until=cap_until,
             effective_next_at=effective_next_at,
             warning=warning,
         )
@@ -58,6 +64,10 @@ class Result:
             data["beats"] = [beat.to_dict() for beat in self.beats]
         if self.quiet_hours_until is not None:
             data["quiet_hours_until"] = self.quiet_hours_until
+        if self.spacing_until is not None:
+            data["spacing_until"] = self.spacing_until
+        if self.cap_until is not None:
+            data["cap_until"] = self.cap_until
         if self.effective_next_at is not None:
             data["effective_next_at"] = self.effective_next_at
         if self.warning:

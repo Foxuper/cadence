@@ -63,8 +63,9 @@ class FakeManager:
 
 
 class FakeCtx:
-    def __init__(self, home: Path) -> None:
+    def __init__(self, home: Path, config: dict[str, object] | None = None) -> None:
         self._manager = FakeManager(home)
+        self.config = config or {}
         self.tools: dict[str, dict[str, object]] = {}
         self.commands: dict[str, dict[str, object]] = {}
         self.hooks: dict[str, list[Callable[..., object]]] = {}
@@ -72,7 +73,7 @@ class FakeCtx:
         self.injected: list[str] = []
 
     def get_config(self, key: str, default: object = None) -> object:
-        return default
+        return self.config.get(key, default)
 
     def register_tool(self, name: str, **kwargs: object) -> None:
         self.tools[name] = kwargs

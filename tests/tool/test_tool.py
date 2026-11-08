@@ -6,14 +6,20 @@ from pathlib import Path
 
 from support import DEFAULT_TEST_POLICY, KEY, FakeClock, make_store
 
-from cadence.core.enums import Action, ErrorCode, Kind, Status
+from cadence.core.enums import Action, ErrorCode, Kind, Reason, Status, UrgentGate
 from cadence.core.policy import Policy
 from cadence.core.store import Store
 from cadence.tool import Tool
 
 
-def make_tool(tmp_path: Path, clock: FakeClock, policy: Policy | None = None) -> tuple[Store, Tool]:
-    store = make_store(tmp_path, clock)
+def make_tool(
+    tmp_path: Path,
+    clock: FakeClock,
+    policy: Policy | None = None,
+    *,
+    human: bool = True,
+) -> tuple[Store, Tool]:
+    store = make_store(tmp_path, clock, human=human)
     env = {
         "HERMES_SESSION_KEY": KEY,
         "HERMES_SESSION_PLATFORM": "test",
@@ -123,6 +129,35 @@ def test_update_can_toggle_urgent(tmp_path: Path, clock: FakeClock) -> None:
     assert cleared.ok is True and cleared.beat is not None and cleared.beat.urgent is False
 
 
+def test_command_update_urgent_requires_boolean(tmp_path: Path, clock: FakeClock) -> None:
+    store, tool = make_tool(tmp_path, clock)
+    created = tool.handle({"action": Action.CREATE, "at": "in 10m", "note": "x"}).beat
+    assert created is not None
+    text = tool.command(f"update {created.id} urgent true")
+    assert "urgent" in text
+    assert store.require_beat(created.id).urgent is True
+    text = tool.command(f"update {created.id} urgent false")
+    assert "urgent" not in text
+    assert store.require_beat(created.id).urgent is False
+    assert tool.command(f"update {created.id} urgent").startswith("Usage:")
+    assert tool.command(f"update {created.id} urgent yes").startswith("Usage:")
+
+
+def test_resume_clears_pause_reason(tmp_path: Path, clock: FakeClock) -> None:
+    store, tool = make_tool(tmp_path, clock)
+    created = tool.handle({"action": Action.CREATE, "at": "in 10m", "note": "x"}).beat
+    assert created is not None
+    store.set_status(created.id, Status.PAUSED, error=Reason.UNANSWERED_MUTE, next_at=None)
+    store.conn.execute("UPDATE beats SET noop_streak=3 WHERE id=?", (created.id,))
+    store.conn.commit()
+    result = tool.handle({"action": Action.RESUME, "id": created.id})
+    assert result.ok is True and result.beat is not None
+    assert result.beat.status is Status.ACTIVE
+    assert result.beat.last_error == ""
+    assert store.require_beat(created.id).noop_streak == 0
+    assert "paused:" not in tool.command(f"show {created.id}")
+
+
 def test_command_add_urgent(tmp_path: Path, clock: FakeClock) -> None:
     store, tool = make_tool(tmp_path, clock)
     text = tool.command("add urgent in 10m remember")
@@ -153,7 +188,7 @@ def test_urgent_receipt_warns_when_bypass_is_disabled(tmp_path: Path, clock: Fak
         replace(
             DEFAULT_TEST_POLICY,
             quiet_hours="22:00-08:00",
-            quiet_hours_urgent=False,
+            urgent_bypass=(),
             timezone="UTC",
         ),
     )[1]
@@ -161,7 +196,7 @@ def test_urgent_receipt_warns_when_bypass_is_disabled(tmp_path: Path, clock: Fak
     result = tool.handle({"action": Action.CREATE, "at": "in 10m", "note": "x", "urgent": True})
     assert result.ok is True
     assert result.effective_next_at == datetime(2026, 1, 1, 8, 0, tzinfo=UTC).timestamp()
-    assert result.warning is not None and "quiet_hours_urgent" in result.warning
+    assert result.warning is not None and "urgent_bypass" in result.warning
 
 
 def test_urgent_receipt_skips_quiet_hours_when_enabled(tmp_path: Path, clock: FakeClock) -> None:
@@ -171,7 +206,7 @@ def test_urgent_receipt_skips_quiet_hours_when_enabled(tmp_path: Path, clock: Fa
         replace(
             DEFAULT_TEST_POLICY,
             quiet_hours="22:00-08:00",
-            quiet_hours_urgent=True,
+            urgent_bypass=(UrgentGate.QUIET_HOURS,),
             timezone="UTC",
         ),
     )[1]
@@ -183,6 +218,24 @@ def test_urgent_receipt_skips_quiet_hours_when_enabled(tmp_path: Path, clock: Fa
     assert result.warning == ""
 
 
+def test_urgent_receipt_spacing_only_still_warns_about_quiet_hours(tmp_path: Path, clock: FakeClock) -> None:
+    tool = make_tool(
+        tmp_path,
+        clock,
+        replace(
+            DEFAULT_TEST_POLICY,
+            quiet_hours="22:00-08:00",
+            urgent_bypass=(UrgentGate.SPACING,),
+            timezone="UTC",
+        ),
+    )[1]
+    clock.wall = datetime(2026, 1, 1, 0, 30, tzinfo=UTC).timestamp()
+    result = tool.handle({"action": Action.CREATE, "at": "in 10m", "note": "x", "urgent": True})
+    assert result.quiet_hours_until == datetime(2026, 1, 1, 8, 0, tzinfo=UTC).timestamp()
+    assert result.warning is not None
+    assert "quiet_hours" in result.warning and "urgent_bypass" in result.warning
+
+
 def test_command_warns_about_quiet_hours(tmp_path: Path, clock: FakeClock) -> None:
     tool = make_tool(
         tmp_path,
@@ -192,3 +245,177 @@ def test_command_warns_about_quiet_hours(tmp_path: Path, clock: FakeClock) -> No
     clock.wall = datetime(2026, 1, 1, 0, 30, tzinfo=UTC).timestamp()
     text = tool.command("add in 10m remember")
     assert "Warning:" in text and "quiet hours" in text
+
+
+def test_create_receipt_warns_about_spacing(tmp_path: Path, clock: FakeClock) -> None:
+    store, tool = make_tool(
+        tmp_path,
+        clock,
+        replace(DEFAULT_TEST_POLICY, spacing_minutes=15, timezone="UTC"),
+    )
+    now = datetime(2026, 1, 1, 0, 30, tzinfo=UTC).timestamp()
+    clock.wall = now
+    store.conn.execute("UPDATE sessions SET last_beat_at=? WHERE session_key=?", (now - 60, KEY))
+    store.conn.commit()
+    result = tool.handle({"action": Action.CREATE, "at": "in 5m", "note": "x"})
+    hold = now - 60 + 900
+    assert result.ok is True
+    assert result.spacing_until == hold
+    assert result.effective_next_at == hold
+    assert result.warning is not None and "spacing" in result.warning
+    assert result.to_dict()["spacing_until"] == hold
+
+
+def test_receipt_combines_quiet_hours_and_spacing(tmp_path: Path, clock: FakeClock) -> None:
+    store, tool = make_tool(
+        tmp_path,
+        clock,
+        replace(
+            DEFAULT_TEST_POLICY,
+            quiet_hours="22:00-08:00",
+            spacing_minutes=15,
+            timezone="UTC",
+        ),
+    )
+    now = datetime(2026, 1, 1, 7, 50, tzinfo=UTC).timestamp()
+    clock.wall = now
+    store.conn.execute("UPDATE sessions SET last_beat_at=? WHERE session_key=?", (now, KEY))
+    store.conn.commit()
+    result = tool.handle({"action": Action.CREATE, "at": "in 5m", "note": "x"})
+    quiet = datetime(2026, 1, 1, 8, 0, tzinfo=UTC).timestamp()
+    spacing = now + 900
+    assert result.quiet_hours_until == quiet
+    assert result.spacing_until == spacing
+    assert result.effective_next_at == spacing
+    assert result.warning is not None
+    assert "quiet hours" in result.warning and "spacing" in result.warning
+
+
+def test_command_labels_deferred_paused_and_errors(tmp_path: Path, clock: FakeClock) -> None:
+    store, tool = make_tool(tmp_path, clock)
+    created = tool.handle({"action": Action.CREATE, "at": "in 10m", "note": "x"}).beat
+    assert created is not None
+    store.conn.execute("UPDATE beats SET last_error=? WHERE id=?", (Reason.SPACING.value, created.id))
+    store.conn.commit()
+    text = tool.command(f"show {created.id}")
+    assert "deferred: spacing" in text and "error: spacing" not in text
+    store.conn.execute(
+        "UPDATE beats SET last_error=?, status=? WHERE id=?",
+        (Reason.UNANSWERED_MUTE.value, Status.PAUSED.value, created.id),
+    )
+    store.conn.commit()
+    assert "paused: unanswered_mute" in tool.command(f"show {created.id}")
+    store.conn.execute(
+        "UPDATE beats SET last_error=?, status=? WHERE id=?",
+        (Reason.INJECT_REFUSED.value, Status.ACTIVE.value, created.id),
+    )
+    store.conn.commit()
+    assert "error: inject_refused" in tool.command(f"show {created.id}")
+
+
+def test_urgent_receipt_skips_spacing_when_policy_allows(tmp_path: Path, clock: FakeClock) -> None:
+    store, tool = make_tool(
+        tmp_path,
+        clock,
+        replace(
+            DEFAULT_TEST_POLICY,
+            spacing_minutes=15,
+            urgent_bypass=(UrgentGate.QUIET_HOURS, UrgentGate.SPACING),
+            timezone="UTC",
+        ),
+    )
+    now = datetime(2026, 1, 1, 0, 30, tzinfo=UTC).timestamp()
+    clock.wall = now
+    store.conn.execute("UPDATE sessions SET last_beat_at=? WHERE session_key=?", (now - 60, KEY))
+    store.conn.commit()
+    result = tool.handle({"action": Action.CREATE, "at": "in 5m", "note": "x", "urgent": True})
+    assert result.ok is True
+    assert result.spacing_until is None
+    assert result.effective_next_at is None
+    assert result.warning == ""
+
+
+def test_urgent_receipt_warns_about_spacing_with_quiet_hours_policy(tmp_path: Path, clock: FakeClock) -> None:
+    store, tool = make_tool(
+        tmp_path,
+        clock,
+        replace(
+            DEFAULT_TEST_POLICY,
+            spacing_minutes=15,
+            urgent_bypass=(UrgentGate.QUIET_HOURS,),
+            timezone="UTC",
+        ),
+    )
+    now = datetime(2026, 1, 1, 0, 30, tzinfo=UTC).timestamp()
+    clock.wall = now
+    store.conn.execute("UPDATE sessions SET last_beat_at=? WHERE session_key=?", (now - 60, KEY))
+    store.conn.commit()
+    result = tool.handle({"action": Action.CREATE, "at": "in 5m", "note": "x", "urgent": True})
+    assert result.spacing_until == now - 60 + 900
+    assert result.warning is not None and "spacing" in result.warning
+
+
+def test_receipt_warns_about_daily_message_cap(tmp_path: Path, clock: FakeClock) -> None:
+    store, tool = make_tool(
+        tmp_path,
+        clock,
+        replace(DEFAULT_TEST_POLICY, max_messages_per_day=1, timezone="UTC"),
+    )
+    clock.wall = datetime(2026, 1, 1, 12, 0, tzinfo=UTC).timestamp()
+    store.conn.execute(
+        "INSERT INTO ledger(day,session_key,messages,fires) VALUES(?,?,1,0)",
+        ("2026-01-01", KEY),
+    )
+    store.conn.commit()
+    result = tool.handle({"action": Action.CREATE, "at": "in 1h", "note": "x"})
+    midnight = datetime(2026, 1, 2, 0, 0, tzinfo=UTC).timestamp()
+    assert result.cap_until == midnight
+    assert result.effective_next_at == midnight
+    assert result.warning is not None and "daily message cap" in result.warning
+
+
+def test_receipt_warns_about_daily_fire_cap(tmp_path: Path, clock: FakeClock) -> None:
+    store, tool = make_tool(
+        tmp_path,
+        clock,
+        replace(DEFAULT_TEST_POLICY, max_fires_per_day=1, timezone="UTC"),
+    )
+    clock.wall = datetime(2026, 1, 1, 12, 0, tzinfo=UTC).timestamp()
+    store.conn.execute(
+        "INSERT INTO ledger(day,session_key,messages,fires) VALUES(?,?,0,1)",
+        ("2026-01-01", KEY),
+    )
+    store.conn.commit()
+    result = tool.handle({"action": Action.CREATE, "at": "in 1h", "note": "x"})
+    midnight = datetime(2026, 1, 2, 0, 0, tzinfo=UTC).timestamp()
+    assert result.cap_until == midnight
+    assert result.warning is not None and "daily fire cap" in result.warning
+
+
+def test_receipt_warns_about_catch_up(tmp_path: Path, clock: FakeClock) -> None:
+    _, tool = make_tool(tmp_path, clock)
+    clock.wall = datetime(2026, 1, 1, 12, 0, tzinfo=UTC).timestamp()
+    result = tool.handle({"action": Action.CREATE, "at": "2026-01-01T08:00:00+00:00", "note": "x"})
+    assert result.warning is not None
+    assert "catch-up" in result.warning and "missed" in result.warning
+
+
+def test_receipt_warns_about_expiry(tmp_path: Path, clock: FakeClock) -> None:
+    _, tool = make_tool(tmp_path, clock)
+    soon = tool.handle({"action": Action.CREATE, "at": "in 10m", "until": "in 5m", "note": "x"})
+    assert soon.warning is not None and "expires before it fires" in soon.warning
+    past = tool.handle(
+        {
+            "action": Action.CREATE,
+            "at": "in 10m",
+            "until": "2020-01-01T00:00:00+00:00",
+            "note": "x",
+        }
+    )
+    assert past.warning is not None and "already expired" in past.warning
+
+
+def test_receipt_warns_about_missing_human_proof(tmp_path: Path, clock: FakeClock) -> None:
+    _, tool = make_tool(tmp_path, clock, human=False)
+    result = tool.handle({"action": Action.CREATE, "at": "in 10m", "note": "x"})
+    assert result.warning is not None and "no human message" in result.warning

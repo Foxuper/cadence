@@ -62,6 +62,11 @@ class NoopBackoff(StrEnum):
     ASSERTIVE = "assertive"
 
 
+class UrgentGate(StrEnum):
+    QUIET_HOURS = "quiet_hours"
+    SPACING = "spacing"
+
+
 class UnansweredPolicy(StrEnum):
     OFF = "off"
     HARD = "hard"
@@ -86,3 +91,21 @@ class Reason(StrEnum):
     EXPIRED = "expired"
     MISSED = "missed"
     STALE_CLAIM = "stale_claim"
+
+
+DEFERRAL_REASONS: frozenset[str] = frozenset(
+    {
+        Reason.QUIET_HOURS.value,
+        Reason.DAILY_MESSAGE_CAP.value,
+        Reason.DAILY_FIRE_CAP.value,
+        Reason.SPACING.value,
+        Reason.NOOP_BACKOFF.value,
+    }
+)
+
+PAUSE_REASONS: frozenset[str] = frozenset(
+    {
+        Reason.NOOP_PAUSE.value,
+        Reason.UNANSWERED_MUTE.value,
+    }
+)

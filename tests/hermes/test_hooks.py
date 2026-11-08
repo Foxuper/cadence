@@ -63,6 +63,13 @@ def test_human_message_marks_session(controller: Controller) -> None:
     assert store.has_human(KEY)
 
 
+def test_slash_command_marks_session(controller: Controller) -> None:
+    dispatch(controller, FakeEvent("/cadence list"))
+    store = controller.store
+    assert store is not None
+    assert store.has_human(KEY)
+
+
 def test_new_clears_human_proof(controller: Controller) -> None:
     dispatch(controller, FakeEvent("hello"))
     store = controller.store

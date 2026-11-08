@@ -7,7 +7,7 @@ from pathlib import Path
 from support import DEFAULT_TEST_POLICY, KEY, FakeClock, make_store
 
 from cadence.core.engine import Engine
-from cadence.core.enums import Kind, Reason, Status
+from cadence.core.enums import Kind, Reason, Status, UrgentGate
 from cadence.core.model import Beat
 from cadence.core.policy import Policy
 from cadence.core.store import Store
@@ -95,14 +95,14 @@ def test_quiet_hours_defers(tmp_path: Path, clock: FakeClock) -> None:
     assert stored.next_at == datetime(2026, 1, 2, 7, 0, tzinfo=UTC).timestamp()
 
 
-def test_urgent_bypasses_quiet_hours_when_enabled(tmp_path: Path, clock: FakeClock) -> None:
+def test_urgent_bypasses_quiet_hours_with_policy(tmp_path: Path, clock: FakeClock) -> None:
     store, engine, calls = setup(
         tmp_path,
         clock,
         policy=replace(
             DEFAULT_TEST_POLICY,
             quiet_hours="23:00-07:00",
-            quiet_hours_urgent=True,
+            urgent_bypass=(UrgentGate.QUIET_HOURS,),
         ),
     )
     clock.wall = datetime(2026, 1, 1, 23, 30, tzinfo=UTC).timestamp()
@@ -111,14 +111,14 @@ def test_urgent_bypasses_quiet_hours_when_enabled(tmp_path: Path, clock: FakeClo
     assert len(calls) == 1
 
 
-def test_urgent_still_defers_when_disabled(tmp_path: Path, clock: FakeClock) -> None:
+def test_urgent_still_defers_with_policy_off(tmp_path: Path, clock: FakeClock) -> None:
     store, engine, calls = setup(
         tmp_path,
         clock,
         policy=replace(
             DEFAULT_TEST_POLICY,
             quiet_hours="23:00-07:00",
-            quiet_hours_urgent=False,
+            urgent_bypass=(),
         ),
     )
     clock.wall = datetime(2026, 1, 1, 23, 30, tzinfo=UTC).timestamp()
@@ -126,6 +126,122 @@ def test_urgent_still_defers_when_disabled(tmp_path: Path, clock: FakeClock) -> 
     engine.tick()
     assert calls == []
     assert store.require_beat(created.id).last_error == Reason.QUIET_HOURS
+
+
+def test_urgent_bypasses_spacing_with_policy(tmp_path: Path, clock: FakeClock) -> None:
+    store, engine, calls = setup(
+        tmp_path,
+        clock,
+        policy=replace(
+            DEFAULT_TEST_POLICY,
+            spacing_minutes=15,
+            urgent_bypass=(UrgentGate.QUIET_HOURS, UrgentGate.SPACING),
+        ),
+    )
+    store.conn.execute("UPDATE sessions SET last_beat_at=? WHERE session_key=?", (clock.now() - 60, KEY))
+    store.conn.commit()
+    beat(store, clock, urgent=True)
+    engine.tick()
+    assert len(calls) == 1
+
+
+def test_urgent_does_not_bypass_spacing_with_quiet_hours_policy(tmp_path: Path, clock: FakeClock) -> None:
+    store, engine, calls = setup(
+        tmp_path,
+        clock,
+        policy=replace(
+            DEFAULT_TEST_POLICY,
+            spacing_minutes=15,
+            urgent_bypass=(UrgentGate.QUIET_HOURS,),
+        ),
+    )
+    store.conn.execute("UPDATE sessions SET last_beat_at=? WHERE session_key=?", (clock.now() - 60, KEY))
+    store.conn.commit()
+    created = beat(store, clock, urgent=True)
+    engine.tick()
+    assert calls == []
+    assert store.require_beat(created.id).last_error == Reason.SPACING
+
+
+def test_urgent_spacing_only_bypasses_spacing(tmp_path: Path, clock: FakeClock) -> None:
+    store, engine, calls = setup(
+        tmp_path,
+        clock,
+        policy=replace(
+            DEFAULT_TEST_POLICY,
+            spacing_minutes=15,
+            urgent_bypass=(UrgentGate.SPACING,),
+        ),
+    )
+    store.conn.execute("UPDATE sessions SET last_beat_at=? WHERE session_key=?", (clock.now() - 60, KEY))
+    store.conn.commit()
+    beat(store, clock, urgent=True)
+    engine.tick()
+    assert len(calls) == 1
+
+
+def test_urgent_spacing_only_still_defers_quiet_hours(tmp_path: Path, clock: FakeClock) -> None:
+    store, engine, calls = setup(
+        tmp_path,
+        clock,
+        policy=replace(
+            DEFAULT_TEST_POLICY,
+            quiet_hours="23:00-07:00",
+            urgent_bypass=(UrgentGate.SPACING,),
+        ),
+    )
+    clock.wall = datetime(2026, 1, 1, 23, 30, tzinfo=UTC).timestamp()
+    created = beat(store, clock, urgent=True)
+    engine.tick()
+    assert calls == []
+    assert store.require_beat(created.id).last_error == Reason.QUIET_HOURS
+
+
+def test_urgent_does_not_bypass_daily_message_cap(tmp_path: Path, clock: FakeClock) -> None:
+    store, engine, calls = setup(
+        tmp_path,
+        clock,
+        policy=replace(
+            DEFAULT_TEST_POLICY,
+            max_messages_per_day=1,
+            urgent_bypass=(UrgentGate.QUIET_HOURS, UrgentGate.SPACING),
+        ),
+    )
+    clock.wall = datetime(2026, 1, 1, 12, 0, tzinfo=UTC).timestamp()
+    store.conn.execute(
+        "INSERT INTO ledger(day,session_key,messages,fires) VALUES(?,?,1,0)",
+        ("2026-01-01", KEY),
+    )
+    store.conn.commit()
+    created = beat(store, clock, urgent=True)
+    engine.tick()
+    assert calls == []
+    assert store.require_beat(created.id).last_error == Reason.DAILY_MESSAGE_CAP
+
+
+def test_urgent_does_not_bypass_catch_up(tmp_path: Path, clock: FakeClock) -> None:
+    store, engine, calls = setup(
+        tmp_path,
+        clock,
+        policy=replace(
+            DEFAULT_TEST_POLICY,
+            catch_up_minutes=60,
+            urgent_bypass=(UrgentGate.QUIET_HOURS, UrgentGate.SPACING),
+        ),
+    )
+    created = store.create_beat(
+        session_key=KEY,
+        note="remember",
+        kind=Kind.AT,
+        next_at=clock.now() - 7200,
+        interval_s=None,
+        max_fires=None,
+        expires_at=None,
+        urgent=True,
+    )
+    engine.tick()
+    assert calls == []
+    assert store.require_beat(created.id).status is Status.MISSED
 
 
 def test_spacing_defers(tmp_path: Path, clock: FakeClock) -> None:

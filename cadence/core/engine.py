@@ -7,7 +7,7 @@ import secrets
 from dataclasses import dataclass
 
 from ..protocols import Clock, Injector
-from .enums import Kind, Reason, Scope, Status, UnansweredPolicy
+from .enums import Kind, Reason, Scope, Status, UnansweredPolicy, UrgentGate
 from .model import MARKER, Beat
 from .policy import Policy, PolicyProvider
 from .store import Store
@@ -64,7 +64,8 @@ class Engine:
             if not current_session or current_session != (beat.anchor_session_id or ""):
                 return None
         quiet = policy.quiet_until(now)
-        if quiet is not None and not (beat.urgent and policy.quiet_hours_urgent):
+        urgent_quiet = beat.urgent and UrgentGate.QUIET_HOURS in policy.urgent_bypass
+        if quiet is not None and not urgent_quiet:
             self.store.defer(beat, quiet, Reason.QUIET_HOURS)
             return None
         if not self.store.has_human(beat.session_key):
@@ -87,7 +88,8 @@ class Engine:
             self.store.defer(beat, policy.next_day(now), Reason.DAILY_FIRE_CAP)
             return None
         last_beat = session.last_beat_at if session else None
-        if last_beat is not None and last_beat + policy.spacing_s > now:
+        urgent_spacing = beat.urgent and UrgentGate.SPACING in policy.urgent_bypass
+        if last_beat is not None and last_beat + policy.spacing_s > now and not urgent_spacing:
             self.store.defer(beat, last_beat + policy.spacing_s, Reason.SPACING)
             return None
         if beat.next_at is None:

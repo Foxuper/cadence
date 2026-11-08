@@ -131,7 +131,7 @@ These live under `plugins.entries.cadence.settings` and also appear in
 | `enabled` | true | Master switch |
 | `timezone` | `""` | IANA zone; blank = profile zone |
 | `quiet_hours` | `22:00-08:00` | Defer beats during this window |
-| `quiet_hours_urgent` | false | Let beats marked `urgent` bypass quiet hours |
+| `urgent_bypass` | `[]` | Gate names: `quiet_hours`, `spacing`; hard gates always apply |
 | `max_messages_per_day` | 12 | Delivered (non-silent) replies per chat, local day |
 | `max_fires_per_day` | 24 | Beat fires per chat, local day |
 | `spacing_minutes` | 15 | Minimum between beats in a chat |
@@ -146,8 +146,9 @@ These live under `plugins.entries.cadence.settings` and also appear in
 | `unanswered_policy` | `smart` | `off` / `hard` / `smart` |
 | `unanswered_after` | 2 | Delivered beats without human reply |
 
-`urgent` is per beat. It only bypasses quiet hours when
-`quiet_hours_urgent` is enabled; otherwise the beat waits like any other.
+`urgent` is per beat. `urgent_bypass` is a list of gate names: `quiet_hours`,
+`spacing`, both, or empty (`spacing` uses `spacing_minutes`). Hard gates — daily
+caps, catch-up, expiry, human proof and unanswered mute — always apply.
 
 ## Commands
 
@@ -155,7 +156,7 @@ These live under `plugins.entries.cadence.settings` and also appear in
 |---|---|
 | `/cadence list` | Beats in this chat |
 | `/cadence add in 10m <note>` | One-shot reminder |
-| `/cadence add urgent in 10m <note>` | One-shot that bypasses quiet hours when enabled |
+| `/cadence add urgent in 10m <note>` | One-shot; bypass depends on `urgent_bypass` |
 | `/cadence add every 15m <note>` | Recurring beat |
 | `/cadence add session in 10m <note>` | Anchored to this session |
 | `/cadence add every 15m until 2h <note>` | Recurring with an expiry |
@@ -165,11 +166,12 @@ These live under `plugins.entries.cadence.settings` and also appear in
 | `/cadence pause|resume|cancel|delete <id>` | Control a beat |
 | `/cadence update <id> note <note>` | Edit the note |
 | `/cadence update <id> in 20m <note>` | Reschedule |
+| `/cadence update <id> urgent true|false` | Toggle urgent |
 
 The agent gets the same actions as a `cadence` tool: `create`, `list`, `get`,
 `update`, `pause`, `resume`, `cancel` and `delete`. The tool and the slash
-command accept the same fields: `scope`, `at`/`every`, `until` and `max_fires`
-(`max`).
+command accept the same fields: `scope`, `at`/`every`, `until`, `max_fires`
+(`max`) and `urgent`.
 
 On a beat turn, the agent finishes with the tool's `respond` action:
 `silent=true` suppresses the final message, `silent=false` delivers it. The tool
@@ -178,9 +180,13 @@ per-turn hint. If it forgets, an exact `[SILENT]` is still suppressed as a
 defensive fallback.
 
 Create and update results also include `quiet_hours_until`,
-`effective_next_at` and a `warning` when quiet hours will defer the beat. If the
-beat is urgent but `quiet_hours_urgent` is off, the warning says so. The
-`/cadence` slash command prints the same warning.
+`spacing_until`, `cap_until`, `effective_next_at` and a `warning`. The warning
+covers quiet hours, spacing, exhausted daily caps, expiry before the beat fires,
+catch-up misses and missing human proof. If the beat is urgent but
+`urgent_bypass` does not include `quiet_hours`, the warning says so. The
+`/cadence` slash command prints the same warning. List output labels wait
+reasons as `deferred: ...`, paused beats as `paused: ...`, and real failures as
+`error: ...`.
 
 ## Chat vs session
 

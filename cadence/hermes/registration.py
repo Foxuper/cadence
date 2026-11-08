@@ -195,11 +195,12 @@ class Controller:
         if not key:
             return None
         event_session_id = str(getattr(event, "session_id", "") or "")
+        command = ""
+        if text.startswith("/"):
+            command = text.split(maxsplit=1)[0].lstrip("/").lower()
         with store.lock:
-            if text.startswith("/"):
-                command = text.split(maxsplit=1)[0].lstrip("/").lower()
-                if command in {"new", "reset"}:
-                    store.start_session(key, session_env("HERMES_SESSION_ID"))
+            if command in {"new", "reset"}:
+                store.start_session(key, session_env("HERMES_SESSION_ID"))
                 return None
             human_session = event_session_id
             if not human_session and session_store is not None:

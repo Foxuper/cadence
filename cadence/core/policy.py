@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Protocol, TypeVar
+from typing import Protocol, TypeVar, cast
 
 from ..protocols import PluginContext
 from . import schedule
-from .enums import NoopBackoff, UnansweredPolicy
+from .enums import NoopBackoff, UnansweredPolicy, UrgentGate
 
 E = TypeVar("E", bound=StrEnum)
 
@@ -37,12 +38,31 @@ def _bool(value: object, default: bool) -> bool:
     return bool(value)
 
 
+def _urgent_bypass(value: object, default: tuple[UrgentGate, ...]) -> tuple[UrgentGate, ...]:
+    raw_items: list[object]
+    if isinstance(value, str):
+        raw_items = list(value.split(","))
+    elif isinstance(value, (list, tuple, set, frozenset)):
+        raw_items = list(cast("Iterable[object]", value))
+    else:
+        return default
+    gates: list[UrgentGate] = []
+    for item in raw_items:
+        try:
+            gate = UrgentGate(str(item).strip().lower())
+        except ValueError:
+            continue
+        if gate not in gates:
+            gates.append(gate)
+    return tuple(gates)
+
+
 @dataclass(frozen=True)
 class Policy:
     enabled: bool = True
     timezone: str = ""
     quiet_hours: str = "22:00-08:00"
-    quiet_hours_urgent: bool = False
+    urgent_bypass: tuple[UrgentGate, ...] = ()
     max_messages_per_day: int = 12
     max_fires_per_day: int = 24
     spacing_minutes: int = 15
@@ -66,10 +86,7 @@ class Policy:
                 enabled=_bool(get("enabled", defaults.enabled), defaults.enabled),
                 timezone=str(get("timezone", defaults.timezone) or ""),
                 quiet_hours=str(get("quiet_hours", defaults.quiet_hours) or ""),
-                quiet_hours_urgent=_bool(
-                    get("quiet_hours_urgent", defaults.quiet_hours_urgent),
-                    defaults.quiet_hours_urgent,
-                ),
+                urgent_bypass=_urgent_bypass(get("urgent_bypass", None), defaults.urgent_bypass),
                 max_messages_per_day=max(
                     0,
                     _int(

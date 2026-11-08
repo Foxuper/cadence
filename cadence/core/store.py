@@ -438,7 +438,7 @@ class Store:
                 (day, current.session_key),
             )
             self.conn.execute(
-                "UPDATE sessions SET last_beat_at=?, unanswered_count=unanswered_count+1 WHERE session_key=?",
+                "UPDATE sessions SET last_beat_at=? WHERE session_key=?",
                 (now, current.session_key),
             )
         return self.require_beat(current.id)
@@ -453,6 +453,10 @@ class Store:
                 "INSERT INTO ledger(day,session_key,messages,fires) VALUES(?,?,1,0) "
                 "ON CONFLICT(day,session_key) DO UPDATE SET messages=messages+1",
                 (day, beat.session_key),
+            )
+            self.conn.execute(
+                "UPDATE sessions SET unanswered_count=unanswered_count+1 WHERE session_key=?",
+                (beat.session_key,),
             )
 
     def fail(self, beat: Beat, due_key: str, now: float, error: str, retry_s: float) -> Beat:

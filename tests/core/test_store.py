@@ -32,6 +32,35 @@ def test_create_claim_complete_one_shot(tmp_path: Path, clock: FakeClock) -> Non
     assert (messages, fires) == (1, 1)
 
 
+def test_unanswered_counts_only_delivered_messages(tmp_path: Path, clock: FakeClock) -> None:
+    store = make_store(tmp_path, clock)
+    beat = store.create_beat(
+        session_key=KEY,
+        note="hello",
+        kind=Kind.AT,
+        next_at=clock.now(),
+        interval_s=None,
+        max_fires=None,
+        expires_at=None,
+    )
+    store.complete(beat, "k1", clock.now(), "2026-01-01")
+    session = store.get_session(KEY)
+    assert session is not None and session.unanswered_count == 0
+    store.record_message(beat.id, "2026-01-01")
+    session = store.get_session(KEY)
+    assert session is not None and session.unanswered_count == 1
+    store.note_human_message(
+        KEY,
+        current_session_id="s1",
+        platform="test",
+        chat_id="1",
+        human_at=clock.now(),
+        human_session_id="s1",
+    )
+    session = store.get_session(KEY)
+    assert session is not None and session.unanswered_count == 0
+
+
 def test_recurring_complete_schedules_next(tmp_path: Path, clock: FakeClock) -> None:
     store = make_store(tmp_path, clock)
     beat = store.create_beat(

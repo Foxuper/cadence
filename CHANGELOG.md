@@ -2,6 +2,30 @@
 
 All notable changes to cadence are documented here.
 
+## [0.3.0] - 2026-11-08
+
+### Changed
+
+- Replaced `quiet_hours_urgent` with `urgent_bypass`, a list of gate names
+  `urgent` may bypass: any subset of `quiet_hours` and `spacing` (`spacing` uses
+  `spacing_minutes`). Hard gates (daily caps, catch-up, expiry, human proof and
+  unanswered mute) are never bypassed.
+
+### Added
+
+- Create/update receipts include `spacing_until`, `cap_until` and warnings for
+  spacing, exhausted daily caps, expiry before fire, catch-up misses and missing
+  human proof.
+- List output distinguishes `deferred:`, `paused:` and `error:` reasons.
+- `/cadence update <id> urgent true|false` toggles the urgent flag explicitly.
+
+### Fixed
+
+- Silent beats no longer count as unanswered; only delivered replies do.
+- Slash commands other than `/new` and `/reset` now count as human proof.
+- Resuming a paused beat clears its pause reason and no-op streak.
+- Stale claim recovery runs on every scheduler poll, not only at startup.
+
 ## [0.2.0] - 2026-11-08
 
 ### Added

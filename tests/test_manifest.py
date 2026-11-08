@@ -31,4 +31,7 @@ def test_manifest_config_defaults_match_policy() -> None:
         spec = _mapping(raw_spec)
         if "default" not in spec:
             continue
-        assert defaults[key] == spec["default"], f"{key} default drifted from Policy"
+        expected = defaults[key]
+        if isinstance(expected, tuple):
+            expected = list(cast("tuple[object, ...]", expected))
+        assert expected == spec["default"], f"{key} default drifted from Policy"

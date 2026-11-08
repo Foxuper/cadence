@@ -7,8 +7,17 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 
 from .core import schedule
-from .core.enums import Action, ErrorCode, Kind, Scope, Status
-from .core.model import Beat, BeatView
+from .core.enums import (
+    DEFERRAL_REASONS,
+    PAUSE_REASONS,
+    Action,
+    ErrorCode,
+    Kind,
+    Scope,
+    Status,
+    UrgentGate,
+)
+from .core.model import Beat, BeatView, Session
 from .core.patch import BeatPatch
 from .core.policy import Policy, PolicyProvider
 from .core.results import Result
@@ -67,7 +76,7 @@ SCHEMA = {
             },
             "urgent": {
                 "type": "boolean",
-                "description": "Bypass quiet hours when the profile enables quiet_hours_urgent.",
+                "description": "Bypass the gates listed in urgent_bypass.",
             },
         },
         "required": ["action"],
@@ -89,6 +98,7 @@ HELP = """Cadence:
 /cadence update <id> in 20m <note>
 /cadence update <id> until 2h
 /cadence update <id> max 12
+/cadence update <id> urgent true|false
 
 A beat turn finishes with the cadence tool's respond action; silent=true suppresses the message."""
 
@@ -193,26 +203,90 @@ def _parse_until(args: Mapping[str, object], now: float, policy: Policy) -> floa
         raise _ToolError(ErrorCode.INVALID_UNTIL, str(exc)) from exc
 
 
-def _quiet_hint(
+def _join_reasons(reasons: list[str]) -> str:
+    if len(reasons) == 1:
+        return reasons[0]
+    if len(reasons) == 2:
+        return f"{reasons[0]} and {reasons[1]}"
+    return ", ".join(reasons[:-1]) + f" and {reasons[-1]}"
+
+
+def _schedule_hint(
     next_at: float | None,
+    kind: Kind,
     urgent: bool,
     expires_at: float | None,
     policy: Policy,
-) -> tuple[float | None, float | None, str]:
-    """Return ``(quiet_hours_until, effective_next_at, warning)`` for a receipt."""
-    if next_at is None or not policy.quiet_hours:
-        return None, None, ""
-    hold = schedule.quiet_until(next_at, policy.quiet_hours, policy.timezone)
-    if hold is None or (urgent and policy.quiet_hours_urgent):
-        return None, None, ""
-    when = schedule.format_ts(hold, policy.timezone)
-    if urgent:
-        warning = f"urgent=true but quiet_hours_urgent is false; the beat will wait until {when}"
-    else:
-        warning = f"quiet hours: the beat will wait until {when}"
-    if expires_at is not None and expires_at <= hold:
-        warning += "; it expires before that"
-    return hold, hold, warning
+    session: Session | None,
+    *,
+    now: float,
+    messages: int,
+    fires: int,
+    has_human: bool,
+) -> tuple[float | None, float | None, float | None, float | None, str]:
+    """Return ``(quiet_until, spacing_until, cap_until, effective_next_at, warning)``."""
+    if next_at is None:
+        return None, None, None, None, ""
+
+    urgent_quiet = urgent and UrgentGate.QUIET_HOURS in policy.urgent_bypass
+    urgent_spacing = urgent and UrgentGate.SPACING in policy.urgent_bypass
+
+    holds: list[tuple[float, str]] = []
+
+    quiet_until: float | None = None
+    if policy.quiet_hours and not urgent_quiet:
+        quiet_hold = schedule.quiet_until(next_at, policy.quiet_hours, policy.timezone)
+        if quiet_hold is not None:
+            quiet_until = quiet_hold
+            holds.append((quiet_hold, "quiet hours"))
+
+    cap_until: float | None = None
+    midnight = policy.next_day(now)
+    if next_at < midnight:
+        if policy.max_messages_per_day and messages >= policy.max_messages_per_day:
+            cap_until = midnight
+            holds.append((midnight, "daily message cap"))
+        if policy.max_fires_per_day and fires >= policy.max_fires_per_day:
+            cap_until = midnight
+            holds.append((midnight, "daily fire cap"))
+
+    spacing_until: float | None = None
+    if (
+        not urgent_spacing
+        and policy.spacing_s > 0
+        and session is not None
+        and session.last_beat_at is not None
+    ):
+        base = max([next_at, *(hold for hold, _ in holds)])
+        spacing_hold = session.last_beat_at + policy.spacing_s
+        if spacing_hold > base:
+            spacing_until = spacing_hold
+            holds.append((spacing_hold, "spacing"))
+
+    effective_next_at = max((hold for hold, _ in holds), default=None)
+    already_expired = expires_at is not None and expires_at <= now
+    expires_before_fire = expires_at is not None and not already_expired and expires_at <= next_at
+    catch_up_missed = kind is Kind.AT and not already_expired and now - next_at > policy.catch_up_s
+
+    warning_parts: list[str] = []
+    if urgent and quiet_until is not None and UrgentGate.QUIET_HOURS not in policy.urgent_bypass:
+        warning_parts.append("urgent=true but urgent_bypass does not include quiet_hours")
+    if holds and effective_next_at is not None:
+        when = schedule.format_ts(effective_next_at, policy.timezone)
+        reasons = _join_reasons([label for _, label in holds])
+        warning_parts.append(f"{reasons}: the beat will wait until {when}")
+    if already_expired:
+        warning_parts.append("it has already expired")
+    elif expires_before_fire:
+        warning_parts.append("it expires before it fires")
+    elif effective_next_at is not None and expires_at is not None and expires_at <= effective_next_at:
+        warning_parts.append("it expires before that")
+    if catch_up_missed:
+        warning_parts.append("it is outside the catch-up window and will be marked missed")
+    if not has_human and not (already_expired or expires_before_fire or catch_up_missed):
+        warning_parts.append("no human message in this session; it will wait")
+
+    return quiet_until, spacing_until, cap_until, effective_next_at, "; ".join(warning_parts)
 
 
 class Tool:
@@ -281,7 +355,7 @@ class Tool:
             urgent=_as_bool(args.get("urgent")),
             anchor_session_id=anchor,
         )
-        return self._result_for(beat, policy)
+        return self._result_for(beat, policy, now)
 
     def _update(self, beat: Beat, args: Mapping[str, object]) -> Result:
         if beat.terminal:
@@ -320,14 +394,30 @@ class Tool:
         if args.get("urgent") is not None:
             patch = replace(patch, urgent=_as_bool(args.get("urgent")))
         if not patch.items():
-            return self._result_for(beat, policy)
-        return self._result_for(self.store.update_beat(beat.id, patch), policy)
+            return self._result_for(beat, policy, now)
+        return self._result_for(self.store.update_beat(beat.id, patch), policy, now)
 
-    def _result_for(self, beat: Beat, policy: Policy) -> Result:
-        quiet, effective, warning = _quiet_hint(beat.next_at, beat.urgent, beat.expires_at, policy)
+    def _result_for(self, beat: Beat, policy: Policy, now: float) -> Result:
+        session = self.store.get_session(beat.session_key)
+        messages, fires = self.store.ledger(policy.day(now), beat.session_key)
+        has_human = self.store.has_human(beat.session_key)
+        quiet, spacing, cap, effective, warning = _schedule_hint(
+            beat.next_at,
+            beat.kind,
+            beat.urgent,
+            beat.expires_at,
+            policy,
+            session,
+            now=now,
+            messages=messages,
+            fires=fires,
+            has_human=has_human,
+        )
         return Result.success(
             beat=beat,
             quiet_hours_until=quiet,
+            spacing_until=spacing,
+            cap_until=cap,
             effective_next_at=effective,
             warning=warning,
         )
@@ -342,7 +432,13 @@ class Tool:
             text += f" \u00b7 {when}"
         text += f" \u00b7 {beat.note}"
         if beat.last_error:
-            text += f" \u00b7 error: {beat.last_error}"
+            if beat.last_error in DEFERRAL_REASONS:
+                label = "deferred"
+            elif beat.last_error in PAUSE_REASONS:
+                label = "paused"
+            else:
+                label = "error"
+            text += f" \u00b7 {label}: {beat.last_error}"
         return text
 
     def handle(self, args: Mapping[str, object], **kwargs: object) -> Result:
@@ -385,7 +481,15 @@ class Tool:
                 now = self.clock.now()
                 next_at = beat.next_at if beat.next_at and beat.next_at > now else now
                 return Result.success(
-                    beat=self.store.update_beat(beat.id, BeatPatch(status=Status.ACTIVE, next_at=next_at))
+                    beat=self.store.update_beat(
+                        beat.id,
+                        BeatPatch(
+                            status=Status.ACTIVE,
+                            next_at=next_at,
+                            last_error="",
+                            noop_streak=0,
+                        ),
+                    )
                 )
             if beat.terminal:
                 return Result.failure(ErrorCode.ITEM_IS_TERMINAL)
@@ -447,7 +551,10 @@ class Tool:
                 args["id"] = parts[1] if len(parts) > 1 else ""
             elif action is Action.UPDATE:
                 if len(parts) < 3:
-                    return "Usage: /cadence update <id> note <note> | in 20m <note> | until 2h | max 12"
+                    return (
+                        "Usage: /cadence update <id> note <note> | in 20m <note> | "
+                        "until 2h | max 12 | urgent true|false"
+                    )
                 args["id"] = parts[1]
                 rest = parts[2:]
                 kind = rest[0].lower()
@@ -464,6 +571,11 @@ class Tool:
                         args["every"] = rest[1]
                     else:
                         args["at"] = f"{kind} {rest[1]}"
+                    rest = rest[2:]
+                elif kind == "urgent":
+                    if len(rest) < 2 or rest[1].lower() not in {"true", "false"}:
+                        return "Usage: /cadence update <id> urgent true|false"
+                    args["urgent"] = rest[1].lower() == "true"
                     rest = rest[2:]
                 elif kind not in {"until", "max", "max_fires"}:
                     args["at"] = rest[0]
