@@ -31,6 +31,7 @@ class Beat:
     error_count: int = 0
     version: int = 1
     scope: Scope = Scope.CHAT
+    urgent: bool = False
     anchor_session_id: str | None = None
     noop_streak: int = 0
 
@@ -47,6 +48,7 @@ class BeatView:
     note: str
     kind: Kind
     scope: Scope
+    urgent: bool
     status: Status
     next_at: float | None
     interval_s: float | None
@@ -62,6 +64,7 @@ class BeatView:
             note=beat.note,
             kind=beat.kind,
             scope=beat.scope,
+            urgent=beat.urgent,
             status=beat.status,
             next_at=beat.next_at,
             interval_s=beat.interval_s,
@@ -77,6 +80,7 @@ class BeatView:
             "note": self.note,
             "kind": self.kind.value,
             "scope": self.scope.value,
+            "urgent": self.urgent,
             "status": self.status.value,
             "next_at": self.next_at,
             "interval_s": self.interval_s,

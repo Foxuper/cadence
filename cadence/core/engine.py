@@ -64,7 +64,7 @@ class Engine:
             if not current_session or current_session != (beat.anchor_session_id or ""):
                 return None
         quiet = policy.quiet_until(now)
-        if quiet is not None:
+        if quiet is not None and not (beat.urgent and policy.quiet_hours_urgent):
             self.store.defer(beat, quiet, Reason.QUIET_HOURS)
             return None
         if not self.store.has_human(beat.session_key):

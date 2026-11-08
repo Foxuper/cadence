@@ -2,6 +2,17 @@
 
 All notable changes to cadence are documented here.
 
+## [0.2.0] - 2026-11-08
+
+### Added
+
+- Per-beat `urgent` flag. It bypasses quiet hours only when the profile enables
+  `quiet_hours_urgent` (default off).
+- Create/update receipts include `quiet_hours_until`, `effective_next_at` and a
+  `warning` when quiet hours will defer the beat. If the beat is urgent but
+  `quiet_hours_urgent` is off, the warning says so.
+- The `/cadence` slash command prints the same quiet-hours warning.
+
 ## [0.1.0] - 2026-11-07
 
 - Persistent one-shot (`at`) and recurring (`every`) beats, bound to the chat

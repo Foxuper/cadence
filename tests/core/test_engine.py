@@ -32,7 +32,14 @@ def setup(
     return store, engine, calls
 
 
-def beat(store: Store, clock: FakeClock, kind: Kind = Kind.AT, interval: float | None = None) -> Beat:
+def beat(
+    store: Store,
+    clock: FakeClock,
+    kind: Kind = Kind.AT,
+    interval: float | None = None,
+    *,
+    urgent: bool = False,
+) -> Beat:
     return store.create_beat(
         session_key=KEY,
         note="remember",
@@ -41,6 +48,7 @@ def beat(store: Store, clock: FakeClock, kind: Kind = Kind.AT, interval: float |
         interval_s=interval,
         max_fires=None,
         expires_at=None,
+        urgent=urgent,
     )
 
 
@@ -85,6 +93,39 @@ def test_quiet_hours_defers(tmp_path: Path, clock: FakeClock) -> None:
     stored = store.require_beat(created.id)
     assert stored.status is Status.ACTIVE and stored.last_error == Reason.QUIET_HOURS
     assert stored.next_at == datetime(2026, 1, 2, 7, 0, tzinfo=UTC).timestamp()
+
+
+def test_urgent_bypasses_quiet_hours_when_enabled(tmp_path: Path, clock: FakeClock) -> None:
+    store, engine, calls = setup(
+        tmp_path,
+        clock,
+        policy=replace(
+            DEFAULT_TEST_POLICY,
+            quiet_hours="23:00-07:00",
+            quiet_hours_urgent=True,
+        ),
+    )
+    clock.wall = datetime(2026, 1, 1, 23, 30, tzinfo=UTC).timestamp()
+    beat(store, clock, urgent=True)
+    engine.tick()
+    assert len(calls) == 1
+
+
+def test_urgent_still_defers_when_disabled(tmp_path: Path, clock: FakeClock) -> None:
+    store, engine, calls = setup(
+        tmp_path,
+        clock,
+        policy=replace(
+            DEFAULT_TEST_POLICY,
+            quiet_hours="23:00-07:00",
+            quiet_hours_urgent=False,
+        ),
+    )
+    clock.wall = datetime(2026, 1, 1, 23, 30, tzinfo=UTC).timestamp()
+    created = beat(store, clock, urgent=True)
+    engine.tick()
+    assert calls == []
+    assert store.require_beat(created.id).last_error == Reason.QUIET_HOURS
 
 
 def test_spacing_defers(tmp_path: Path, clock: FakeClock) -> None:

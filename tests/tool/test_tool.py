@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 
 from support import DEFAULT_TEST_POLICY, KEY, FakeClock, make_store
@@ -104,3 +105,90 @@ def test_create_rejects_invalid_max_fires(tmp_path: Path, clock: FakeClock) -> N
     _, tool = make_tool(tmp_path, clock)
     result = tool.handle({"action": Action.CREATE, "at": "in 10m", "note": "x", "max_fires": "nope"})
     assert result.ok is False and result.error is ErrorCode.INVALID_MAX_FIRES
+
+
+def test_create_accepts_urgent(tmp_path: Path, clock: FakeClock) -> None:
+    _, tool = make_tool(tmp_path, clock)
+    result = tool.handle({"action": Action.CREATE, "at": "in 10m", "note": "x", "urgent": True})
+    assert result.ok is True and result.beat is not None and result.beat.urgent is True
+
+
+def test_update_can_toggle_urgent(tmp_path: Path, clock: FakeClock) -> None:
+    _, tool = make_tool(tmp_path, clock)
+    created = tool.handle({"action": Action.CREATE, "at": "in 10m", "note": "x"}).beat
+    assert created is not None
+    updated = tool.handle({"action": Action.UPDATE, "id": created.id, "urgent": True})
+    assert updated.ok is True and updated.beat is not None and updated.beat.urgent is True
+    cleared = tool.handle({"action": Action.UPDATE, "id": created.id, "urgent": False})
+    assert cleared.ok is True and cleared.beat is not None and cleared.beat.urgent is False
+
+
+def test_command_add_urgent(tmp_path: Path, clock: FakeClock) -> None:
+    store, tool = make_tool(tmp_path, clock)
+    text = tool.command("add urgent in 10m remember")
+    assert "urgent" in text
+    assert store.list_beats(KEY)[0].urgent is True
+
+
+def test_create_receipt_warns_about_quiet_hours(tmp_path: Path, clock: FakeClock) -> None:
+    tool = make_tool(
+        tmp_path,
+        clock,
+        replace(DEFAULT_TEST_POLICY, quiet_hours="22:00-08:00", timezone="UTC"),
+    )[1]
+    clock.wall = datetime(2026, 1, 1, 0, 30, tzinfo=UTC).timestamp()
+    result = tool.handle({"action": Action.CREATE, "at": "in 10m", "note": "x"})
+    hold = datetime(2026, 1, 1, 8, 0, tzinfo=UTC).timestamp()
+    assert result.ok is True
+    assert result.quiet_hours_until == hold
+    assert result.effective_next_at == hold
+    assert result.warning is not None and "quiet hours" in result.warning
+    assert result.to_dict()["effective_next_at"] == hold
+
+
+def test_urgent_receipt_warns_when_bypass_is_disabled(tmp_path: Path, clock: FakeClock) -> None:
+    tool = make_tool(
+        tmp_path,
+        clock,
+        replace(
+            DEFAULT_TEST_POLICY,
+            quiet_hours="22:00-08:00",
+            quiet_hours_urgent=False,
+            timezone="UTC",
+        ),
+    )[1]
+    clock.wall = datetime(2026, 1, 1, 0, 30, tzinfo=UTC).timestamp()
+    result = tool.handle({"action": Action.CREATE, "at": "in 10m", "note": "x", "urgent": True})
+    assert result.ok is True
+    assert result.effective_next_at == datetime(2026, 1, 1, 8, 0, tzinfo=UTC).timestamp()
+    assert result.warning is not None and "quiet_hours_urgent" in result.warning
+
+
+def test_urgent_receipt_skips_quiet_hours_when_enabled(tmp_path: Path, clock: FakeClock) -> None:
+    tool = make_tool(
+        tmp_path,
+        clock,
+        replace(
+            DEFAULT_TEST_POLICY,
+            quiet_hours="22:00-08:00",
+            quiet_hours_urgent=True,
+            timezone="UTC",
+        ),
+    )[1]
+    clock.wall = datetime(2026, 1, 1, 0, 30, tzinfo=UTC).timestamp()
+    result = tool.handle({"action": Action.CREATE, "at": "in 10m", "note": "x", "urgent": True})
+    assert result.ok is True
+    assert result.quiet_hours_until is None
+    assert result.effective_next_at is None
+    assert result.warning == ""
+
+
+def test_command_warns_about_quiet_hours(tmp_path: Path, clock: FakeClock) -> None:
+    tool = make_tool(
+        tmp_path,
+        clock,
+        replace(DEFAULT_TEST_POLICY, quiet_hours="22:00-08:00", timezone="UTC"),
+    )[1]
+    clock.wall = datetime(2026, 1, 1, 0, 30, tzinfo=UTC).timestamp()
+    text = tool.command("add in 10m remember")
+    assert "Warning:" in text and "quiet hours" in text

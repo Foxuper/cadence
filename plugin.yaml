@@ -1,5 +1,5 @@
 ﻿name: cadence
-version: "0.1.0"
+version: "0.2.0"
 description: >-
   Minimal heartbeat scheduler for Hermes. Persistent one-shot and recurring
   beats are injected into the chat that created them, with quiet hours, daily
@@ -32,6 +32,11 @@ config_schema:
     default: "22:00-08:00"
     label: "Quiet hours"
     description: "HH:MM-HH:MM; beats are deferred until the window ends. Blank disables."
+  quiet_hours_urgent:
+    type: bool
+    default: false
+    label: "Urgent beats bypass quiet hours"
+    description: "Only beats explicitly marked urgent skip quiet hours."
   max_messages_per_day:
     type: int
     default: 12

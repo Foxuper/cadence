@@ -28,6 +28,7 @@ class BeatPatch:
     next_at: float | Unset | None = UNSET
     interval_s: float | Unset | None = UNSET
     status: Status | Unset = UNSET
+    urgent: bool | Unset = UNSET
     max_fires: int | Unset | None = UNSET
     expires_at: float | Unset | None = UNSET
     last_error: str | Unset = UNSET

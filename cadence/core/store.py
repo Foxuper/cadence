@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS beats (
     error_count INTEGER NOT NULL DEFAULT 0,
     version INTEGER NOT NULL DEFAULT 1,
     scope TEXT NOT NULL DEFAULT 'chat',
+    urgent INTEGER NOT NULL DEFAULT 0,
     anchor_session_id TEXT,
     noop_streak INTEGER NOT NULL DEFAULT 0
 );
@@ -111,6 +112,7 @@ class Store:
         self.conn.executescript(SCHEMA)
         self.conn.commit()
         self._ensure_column("beats", "scope", "TEXT NOT NULL DEFAULT 'chat'")
+        self._ensure_column("beats", "urgent", "INTEGER NOT NULL DEFAULT 0")
         self._ensure_column("beats", "anchor_session_id", "TEXT")
         self._ensure_column("beats", "noop_streak", "INTEGER NOT NULL DEFAULT 0")
         self._ensure_column("sessions", "human_session_id", "TEXT")
@@ -150,6 +152,7 @@ class Store:
             error_count=_int(data["error_count"]),
             version=_int(data["version"], 1),
             scope=Scope(_text(data["scope"], Scope.CHAT.value)),
+            urgent=bool(_int(data["urgent"])),
             anchor_session_id=_opt_text(data["anchor_session_id"]),
             noop_streak=_int(data["noop_streak"]),
         )
@@ -171,6 +174,7 @@ class Store:
         max_fires: int | None,
         expires_at: float | None,
         scope: Scope = Scope.CHAT,
+        urgent: bool = False,
         anchor_session_id: str | None = None,
     ) -> Beat:
         now = self.clock.now()
@@ -178,8 +182,8 @@ class Store:
         with self.conn:
             self.conn.execute(
                 "INSERT INTO beats(id,session_key,note,kind,next_at,interval_s,status,"
-                "created_at,updated_at,max_fires,expires_at,scope,anchor_session_id) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "created_at,updated_at,max_fires,expires_at,scope,urgent,anchor_session_id) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     beat_id,
                     session_key,
@@ -193,6 +197,7 @@ class Store:
                     max_fires,
                     expires_at,
                     scope,
+                    int(urgent),
                     anchor_session_id,
                 ),
             )

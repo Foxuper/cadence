@@ -42,6 +42,7 @@ class Policy:
     enabled: bool = True
     timezone: str = ""
     quiet_hours: str = "22:00-08:00"
+    quiet_hours_urgent: bool = False
     max_messages_per_day: int = 12
     max_fires_per_day: int = 24
     spacing_minutes: int = 15
@@ -65,6 +66,10 @@ class Policy:
                 enabled=_bool(get("enabled", defaults.enabled), defaults.enabled),
                 timezone=str(get("timezone", defaults.timezone) or ""),
                 quiet_hours=str(get("quiet_hours", defaults.quiet_hours) or ""),
+                quiet_hours_urgent=_bool(
+                    get("quiet_hours_urgent", defaults.quiet_hours_urgent),
+                    defaults.quiet_hours_urgent,
+                ),
                 max_messages_per_day=max(
                     0,
                     _int(

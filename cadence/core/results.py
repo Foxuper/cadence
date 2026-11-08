@@ -17,13 +17,27 @@ class Result:
     beat: BeatView | None = None
     beats: tuple[BeatView, ...] | None = None
     minimum_seconds: float | None = None
+    quiet_hours_until: float | None = None
+    effective_next_at: float | None = None
+    warning: str = ""
 
     @classmethod
-    def success(cls, *, beat: Beat | None = None, beats: Iterable[Beat] | None = None) -> Result:
+    def success(
+        cls,
+        *,
+        beat: Beat | None = None,
+        beats: Iterable[Beat] | None = None,
+        quiet_hours_until: float | None = None,
+        effective_next_at: float | None = None,
+        warning: str = "",
+    ) -> Result:
         return cls(
             ok=True,
             beat=BeatView.of(beat) if beat is not None else None,
             beats=tuple(BeatView.of(item) for item in beats) if beats is not None else None,
+            quiet_hours_until=quiet_hours_until,
+            effective_next_at=effective_next_at,
+            warning=warning,
         )
 
     @classmethod
@@ -42,4 +56,10 @@ class Result:
             data["beat"] = self.beat.to_dict()
         if self.beats is not None:
             data["beats"] = [beat.to_dict() for beat in self.beats]
+        if self.quiet_hours_until is not None:
+            data["quiet_hours_until"] = self.quiet_hours_until
+        if self.effective_next_at is not None:
+            data["effective_next_at"] = self.effective_next_at
+        if self.warning:
+            data["warning"] = self.warning
         return data

@@ -65,6 +65,10 @@ SCHEMA = {
                 "type": "boolean",
                 "description": "For action=respond: true suppresses the final message.",
             },
+            "urgent": {
+                "type": "boolean",
+                "description": "Bypass quiet hours when the profile enables quiet_hours_urgent.",
+            },
         },
         "required": ["action"],
     },
@@ -73,6 +77,7 @@ SCHEMA = {
 HELP = """Cadence:
 /cadence list
 /cadence add in 10m <note>
+/cadence add urgent in 10m <note>
 /cadence add session in 10m <note>     (anchored to this session)
 /cadence add every 15m <note>
 /cadence add every 15m until 2h <note>
@@ -102,6 +107,14 @@ def _as_int(value: object) -> int | None:
         except ValueError:
             return None
     return None
+
+
+def _as_bool(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return False
 
 
 def _take_limits(tokens: list[str], args: dict[str, object]) -> list[str]:
@@ -180,6 +193,28 @@ def _parse_until(args: Mapping[str, object], now: float, policy: Policy) -> floa
         raise _ToolError(ErrorCode.INVALID_UNTIL, str(exc)) from exc
 
 
+def _quiet_hint(
+    next_at: float | None,
+    urgent: bool,
+    expires_at: float | None,
+    policy: Policy,
+) -> tuple[float | None, float | None, str]:
+    """Return ``(quiet_hours_until, effective_next_at, warning)`` for a receipt."""
+    if next_at is None or not policy.quiet_hours:
+        return None, None, ""
+    hold = schedule.quiet_until(next_at, policy.quiet_hours, policy.timezone)
+    if hold is None or (urgent and policy.quiet_hours_urgent):
+        return None, None, ""
+    when = schedule.format_ts(hold, policy.timezone)
+    if urgent:
+        warning = f"urgent=true but quiet_hours_urgent is false; the beat will wait until {when}"
+    else:
+        warning = f"quiet hours: the beat will wait until {when}"
+    if expires_at is not None and expires_at <= hold:
+        warning += "; it expires before that"
+    return hold, hold, warning
+
+
 class Tool:
     def __init__(
         self, store: Store, clock: Clock, policy_provider: PolicyProvider, session_env: SessionEnv
@@ -243,9 +278,10 @@ class Tool:
             max_fires=max_fires,
             expires_at=expires_at,
             scope=scope,
+            urgent=_as_bool(args.get("urgent")),
             anchor_session_id=anchor,
         )
-        return Result.success(beat=beat)
+        return self._result_for(beat, policy)
 
     def _update(self, beat: Beat, args: Mapping[str, object]) -> Result:
         if beat.terminal:
@@ -281,14 +317,27 @@ class Tool:
                 patch = replace(patch, expires_at=_parse_until(args, now, policy))
             except _ToolError as exc:
                 return exc.result()
+        if args.get("urgent") is not None:
+            patch = replace(patch, urgent=_as_bool(args.get("urgent")))
         if not patch.items():
-            return Result.success(beat=beat)
-        return Result.success(beat=self.store.update_beat(beat.id, patch))
+            return self._result_for(beat, policy)
+        return self._result_for(self.store.update_beat(beat.id, patch), policy)
+
+    def _result_for(self, beat: Beat, policy: Policy) -> Result:
+        quiet, effective, warning = _quiet_hint(beat.next_at, beat.urgent, beat.expires_at, policy)
+        return Result.success(
+            beat=beat,
+            quiet_hours_until=quiet,
+            effective_next_at=effective,
+            warning=warning,
+        )
 
     def _format(self, beat: BeatView) -> str:
         policy = self.policy_provider()
         when = schedule.format_ts(beat.next_at, policy.timezone)
         text = f"{beat.id} [{beat.status.value}] {beat.kind.value}/{beat.scope.value}"
+        if beat.urgent:
+            text += " \u00b7 urgent"
         if when:
             text += f" \u00b7 {when}"
         text += f" \u00b7 {beat.note}"
@@ -369,8 +418,11 @@ class Tool:
                     scope = Scope(rest[0].lower())
                     rest = rest[1:]
                 args["scope"] = scope
+                if rest and rest[0].lower() == "urgent":
+                    args["urgent"] = True
+                    rest = rest[1:]
                 if not rest:
-                    return "Usage: /cadence add [session|chat] every 15m [until 2h] [max 12] <note>"
+                    return "Usage: /cadence add [session|chat] [urgent] every 15m [until 2h] [max 12] <note>"
                 if rest[0].lower() in {"in", "every", "at"}:
                     if len(rest) < 2:
                         return "Missing the beat time."
@@ -435,4 +487,7 @@ class Tool:
             return "Beat deleted."
         if result.beat is None:
             return "Done."
-        return self._format(result.beat)
+        text = self._format(result.beat)
+        if result.warning:
+            text += f"\nWarning: {result.warning}"
+        return text

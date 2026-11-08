@@ -131,6 +131,7 @@ These live under `plugins.entries.cadence.settings` and also appear in
 | `enabled` | true | Master switch |
 | `timezone` | `""` | IANA zone; blank = profile zone |
 | `quiet_hours` | `22:00-08:00` | Defer beats during this window |
+| `quiet_hours_urgent` | false | Let beats marked `urgent` bypass quiet hours |
 | `max_messages_per_day` | 12 | Delivered (non-silent) replies per chat, local day |
 | `max_fires_per_day` | 24 | Beat fires per chat, local day |
 | `spacing_minutes` | 15 | Minimum between beats in a chat |
@@ -145,12 +146,16 @@ These live under `plugins.entries.cadence.settings` and also appear in
 | `unanswered_policy` | `smart` | `off` / `hard` / `smart` |
 | `unanswered_after` | 2 | Delivered beats without human reply |
 
+`urgent` is per beat. It only bypasses quiet hours when
+`quiet_hours_urgent` is enabled; otherwise the beat waits like any other.
+
 ## Commands
 
 | Command | What it does |
 |---|---|
 | `/cadence list` | Beats in this chat |
 | `/cadence add in 10m <note>` | One-shot reminder |
+| `/cadence add urgent in 10m <note>` | One-shot that bypasses quiet hours when enabled |
 | `/cadence add every 15m <note>` | Recurring beat |
 | `/cadence add session in 10m <note>` | Anchored to this session |
 | `/cadence add every 15m until 2h <note>` | Recurring with an expiry |
@@ -171,6 +176,11 @@ On a beat turn, the agent finishes with the tool's `respond` action:
 schema is sent on every model call, so the model knows this without an extra
 per-turn hint. If it forgets, an exact `[SILENT]` is still suppressed as a
 defensive fallback.
+
+Create and update results also include `quiet_hours_until`,
+`effective_next_at` and a `warning` when quiet hours will defer the beat. If the
+beat is urgent but `quiet_hours_urgent` is off, the warning says so. The
+`/cadence` slash command prints the same warning.
 
 ## Chat vs session
 
